@@ -483,7 +483,10 @@ private final class KmsgMCPServer {
         if keepWindow { command.append("--keep-window") }
         if traceAX { command.append("--trace-ax") }
 
-        let timeoutSec = deepRecovery ? 15.0 : 8.0
+        // kmsg_read can hit cold KakaoTalk + slow AX path resolution on first
+        // open of a chat. Python MCP uses 20/40 here (kmsg-mcp-fix/kmsg-mcp.py
+        // ~line 1130); match that to avoid premature PROCESS_TIMEOUT on warm-up.
+        let timeoutSec = deepRecovery ? 40.0 : 20.0
         var first = runner.run(command, timeoutSec: timeoutSec)
 
         if first.timedOut {
