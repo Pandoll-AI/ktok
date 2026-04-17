@@ -184,6 +184,14 @@ struct ChatWindowResolver {
     }
 
     private func openChatViaSearch(query: String, in rootWindow: UIElement, fallbackWindow: UIElement) throws -> UIElement {
+        // KakaoTalk's default tab is "friends" — its search field only returns
+        // friends, so group-chat queries come back empty. Press the "chatrooms"
+        // tab first so the search field scopes to chat rooms. Idempotent
+        // (pressing an already-active tab is a no-op) and swallows failure —
+        // the downstream search will still log informatively if this was
+        // actually required and didn't take.
+        activateChatroomsTab(in: rootWindow)
+
         runner.log("search: locating search field")
 
         guard let searchField = locateSearchField(in: rootWindow) else {
@@ -255,6 +263,23 @@ struct ChatWindowResolver {
                 runner.log(message)
             }
         )
+    }
+
+    private func activateChatroomsTab(in rootWindow: UIElement) {
+        let buttons = rootWindow.findAll(role: kAXButtonRole, limit: 24, maxNodes: 220)
+        guard let chatroomsButton = buttons.first(where: {
+            ($0.identifier ?? "").lowercased() == "chatrooms"
+        }) else {
+            runner.log("tab: 'chatrooms' button not found in search root; leaving active tab as-is")
+            return
+        }
+        do {
+            try chatroomsButton.press()
+            runner.log("tab: chatrooms tab activated")
+            Thread.sleep(forTimeInterval: 0.1)
+        } catch {
+            runner.log("tab: chatrooms press failed (\(error)); continuing with current tab")
+        }
     }
 
     private func locateSearchField(in rootWindow: UIElement) -> UIElement? {
