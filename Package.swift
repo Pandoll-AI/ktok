@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "kmsg",
+    name: "ktok",
     platforms: [
         .macOS(.v13)
     ],
@@ -23,7 +23,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "kmsg",
+            name: "ktok",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
