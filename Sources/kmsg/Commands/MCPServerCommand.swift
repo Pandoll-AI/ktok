@@ -1020,38 +1020,48 @@ private final class KmsgMCPServer {
     }
 
     private func readMessage() -> JSONDict? {
-        var headers: [String: String] = [:]
+        // Accept both stdio framings seen in the wild:
+        //   (1) LSP-style: `Content-Length: N\r\n\r\n<body>`
+        //   (2) newline-delimited JSON: `{...}\n` (Claude Code / official MCP SDK)
+        //
+        // We peek at the first line; if it looks like a header, fall into
+        // LSP mode; otherwise parse the line itself as a JSON object. Matches
+        // the auto-detect logic in kmsg-mcp-fix/kmsg-mcp.py (_read_message).
+        guard let firstLine = readHeaderLine() else { return nil }
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
 
-        while true {
-            guard let line = readHeaderLine() else { return nil }
-            if line == "\r\n" || line == "\n" {
-                break
-            }
-
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                continue
-            }
-
+        if trimmed.lowercased().hasPrefix("content-length") {
+            // LSP-style: consume further headers + blank separator, then read body.
+            var headers: [String: String] = [:]
             let parts = trimmed.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] = parts[1].trimmingCharacters(in: .whitespaces)
+            if parts.count == 2 {
+                headers["content-length"] = parts[1].trimmingCharacters(in: .whitespaces)
+            }
+            while true {
+                guard let line = readHeaderLine() else { return nil }
+                if line == "\r\n" || line == "\n" { break }
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.isEmpty { break }
+                let kv = t.split(separator: ":", maxSplits: 1)
+                guard kv.count == 2 else { continue }
+                headers[kv[0].trimmingCharacters(in: .whitespaces).lowercased()]
+                    = kv[1].trimmingCharacters(in: .whitespaces)
+            }
+            guard let lengthString = headers["content-length"],
+                  let contentLength = Int(lengthString),
+                  contentLength > 0,
+                  let body = readExact(contentLength),
+                  let obj = try? JSONSerialization.jsonObject(with: body) as? JSONDict
+            else { return nil }
+            return obj
         }
 
-        guard let lengthString = headers["content-length"],
-              let contentLength = Int(lengthString),
-              contentLength > 0,
-              let body = readExact(contentLength)
-        else {
-            return nil
-        }
-
-        guard let object = try? JSONSerialization.jsonObject(with: body),
-              let dict = object as? JSONDict
-        else {
-            return nil
-        }
-        return dict
+        // Newline-delimited JSON: parse the first line directly.
+        guard let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? JSONDict
+        else { return nil }
+        return obj
     }
 
     private func readHeaderLine() -> String? {
@@ -1079,16 +1089,16 @@ private final class KmsgMCPServer {
     }
 
     private func writeMessage(_ payload: JSONDict) throws {
+        // Newline-delimited JSON — the format Claude Code and the official
+        // MCP SDK use. LSP clients that spoke Content-Length on the way in
+        // are also fine with this because they parse line-by-line on stdout.
         let encoded = try JSONSerialization.data(withJSONObject: payload, options: [])
-        let header = "Content-Length: \(encoded.count)\r\n\r\n"
-        header.utf8CString.withUnsafeBufferPointer { buffer in
-            _ = fwrite(buffer.baseAddress, 1, buffer.count - 1, stdout)
-        }
         encoded.withUnsafeBytes { rawBuffer in
             if let baseAddress = rawBuffer.baseAddress {
                 _ = fwrite(baseAddress, 1, encoded.count, stdout)
             }
         }
+        fputc(0x0A, stdout) // '\n'
         fflush(stdout)
     }
 }
