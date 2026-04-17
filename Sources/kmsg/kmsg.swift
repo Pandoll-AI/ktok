@@ -34,6 +34,8 @@ struct Kmsg: ParsableCommand {
             ChatsCommand.self,
             SendCommand.self,
             SendImageCommand.self,
+            SendFileCommand.self,
+            DownloadFileCommand.self,
             ReadCommand.self,
             WatchCommand.self,
             CacheCommand.self,
