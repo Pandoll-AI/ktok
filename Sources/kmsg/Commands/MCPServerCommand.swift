@@ -199,7 +199,7 @@ private final class KmsgMCPServer {
                         "name": "openclaw-kmsg-mcp",
                         "version": serverVersion,
                     ],
-                    "instructions": "Use kmsg_read for read-only operations. Use kmsg_send and kmsg_send_image with confirm=false (or omitted) for sending. Use confirm=true to intentionally require a confirmation step.",
+                    "instructions": "Use kmsg_read for read-only operations. Use kmsg_send, kmsg_send_image, and kmsg_send_file with confirm=false (or omitted) for sending. Use confirm=true to intentionally require a confirmation step. Use kmsg_download_file to pull a file attachment from a chat.",
                     "meta": [
                         "startup_check": startupCheck,
                     ],
@@ -338,6 +338,79 @@ private final class KmsgMCPServer {
                     "additionalProperties": false,
                 ],
             ],
+            [
+                "name": "kmsg_send_file",
+                "description": "Send any file attachment (document, archive, etc.) to a KakaoTalk chat via kmsg. Default sends immediately; confirm=true triggers confirmation-required response.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "chat": ["type": "string", "description": "Chat room or user name"],
+                        "file_path": ["type": "string", "description": "Path to the file to send"],
+                        "confirm": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "If true, do not send and return CONFIRMATION_REQUIRED",
+                        ],
+                        "keep_window": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Keep auto-opened KakaoTalk window",
+                        ],
+                        "trace_ax": [
+                            "type": "boolean",
+                            "default": traceDefault,
+                            "description": "Include AX tracing logs",
+                        ],
+                    ],
+                    "required": ["chat", "file_path"],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "kmsg_download_file",
+                "description": "Download a file attachment from a KakaoTalk chat. Scrolls up to find the attachment, presses Save, and waits for the file to appear in save_dir.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "chat": ["type": "string", "description": "Chat room or user name"],
+                        "filename": [
+                            "type": "string",
+                            "description": "Target filename (substring match). Omit to grab the newest attachment.",
+                        ],
+                        "save_dir": [
+                            "type": "string",
+                            "default": "~/Downloads",
+                            "description": "Directory to save the file into.",
+                        ],
+                        "max_scroll": [
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 30,
+                            "default": 8,
+                            "description": "Max scroll-up attempts when searching",
+                        ],
+                        "stable_timeout_sec": [
+                            "type": "number",
+                            "minimum": 1,
+                            "maximum": 300,
+                            "default": 20,
+                            "description": "Seconds to wait for the downloaded file to stabilize",
+                        ],
+                        "keep_window": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Keep auto-opened KakaoTalk window",
+                        ],
+                        "trace_ax": [
+                            "type": "boolean",
+                            "default": traceDefault,
+                            "description": "Include AX tracing logs",
+                        ],
+                    ],
+                    "required": ["chat"],
+                    "additionalProperties": false,
+                ],
+            ],
         ]
     }
 
@@ -353,6 +426,10 @@ private final class KmsgMCPServer {
             resultObject = callKmsgSend(arguments)
         case "kmsg_send_image":
             resultObject = callKmsgSendImage(arguments)
+        case "kmsg_send_file":
+            resultObject = callKmsgSendFile(arguments)
+        case "kmsg_download_file":
+            resultObject = callKmsgDownloadFile(arguments)
         default:
             throw KmsgMCPError(code: -32601, message: "Unknown tool: \(name)")
         }
@@ -642,6 +719,183 @@ private final class KmsgMCPServer {
             response["meta"] = meta
         }
         return response
+    }
+
+    private func callKmsgSendFile(_ arguments: JSONDict) -> JSONDict {
+        let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = String(describing: arguments["file_path"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let confirm = boolValue(arguments["confirm"], defaultValue: false)
+
+        if chat.isEmpty || filePath.isEmpty {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "chat and file_path are required",
+                hint: "Provide both chat and file_path.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+        if confirm {
+            return errorPayload(
+                code: "CONFIRMATION_REQUIRED",
+                message: "kmsg_send_file blocked because confirm=true",
+                hint: "Ask user for explicit approval, then call again with confirm=false.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        let expanded = (filePath as NSString).expandingTildeInPath
+        let absolutePath = URL(fileURLWithPath: expanded).standardizedFileURL.path
+        if !FileManager.default.fileExists(atPath: absolutePath) {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "file_path must point to an existing file: \(absolutePath)",
+                hint: "Provide a valid local file path.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        let keepWindow = boolValue(arguments["keep_window"], defaultValue: false)
+        let traceAX = boolValue(arguments["trace_ax"], defaultValue: traceDefault)
+
+        var command = ["send-file", chat, absolutePath]
+        if keepWindow { command.append("--keep-window") }
+        if traceAX { command.append("--trace-ax") }
+
+        let run = runner.run(command, timeoutSec: 25.0)
+        if run.timedOut {
+            return errorPayload(
+                code: "PROCESS_TIMEOUT",
+                message: "kmsg send-file timed out",
+                hint: "Retry after ensuring KakaoTalk is responsive.",
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+        if run.returncode != 0 {
+            let code = extractErrorCode("\(run.stdout)\n\(run.stderr)")
+            return errorPayload(
+                code: code,
+                message: "kmsg send-file failed",
+                hint: mapHint(code),
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+
+        var response: JSONDict = [
+            "ok": true,
+            "chat": chat,
+            "sent": true,
+            "file_path": absolutePath,
+            "meta": [
+                "latency_ms": run.latencyMs,
+                "stdout": run.stdout,
+            ],
+        ]
+        if traceAX, !run.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var meta = response["meta"] as? JSONDict ?? [:]
+            meta["stderr_trace"] = run.stderr
+            response["meta"] = meta
+        }
+        return response
+    }
+
+    private func callKmsgDownloadFile(_ arguments: JSONDict) -> JSONDict {
+        let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if chat.isEmpty {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "chat is required",
+                hint: "Provide a chat name.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        var saveDir = String(describing: arguments["save_dir"] ?? "~/Downloads").trimmingCharacters(in: .whitespacesAndNewlines)
+        if saveDir.isEmpty { saveDir = "~/Downloads" }
+
+        var filename: String?
+        if let raw = arguments["filename"], !(raw is NSNull) {
+            let trimmed = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                filename = trimmed
+            }
+        }
+
+        let maxScroll: Int = {
+            if let intValue = arguments["max_scroll"] as? Int { return max(0, min(30, intValue)) }
+            if let doubleValue = arguments["max_scroll"] as? Double { return max(0, min(30, Int(doubleValue))) }
+            return 8
+        }()
+
+        let stableTimeout: Double = {
+            if let doubleValue = arguments["stable_timeout_sec"] as? Double { return max(1.0, min(300.0, doubleValue)) }
+            if let intValue = arguments["stable_timeout_sec"] as? Int { return max(1.0, min(300.0, Double(intValue))) }
+            return 20.0
+        }()
+
+        let keepWindow = boolValue(arguments["keep_window"], defaultValue: false)
+        let traceAX = boolValue(arguments["trace_ax"], defaultValue: traceDefault)
+
+        var command = [
+            "download-file", chat,
+            "--save-dir", saveDir,
+            "--max-scroll", String(maxScroll),
+            "--stable-timeout-sec", String(stableTimeout),
+            "--json",
+        ]
+        if let filename { command.append(contentsOf: ["--filename", filename]) }
+        if keepWindow { command.append("--keep-window") }
+        if traceAX { command.append("--trace-ax") }
+
+        // stable_timeout drives how long the CLI will wait; add headroom for the
+        // scroll loop (0.6 s per attempt) and JXA round-trips.
+        let processTimeout = max(45.0, stableTimeout + Double(maxScroll) * 1.2 + 20.0)
+        let run = runner.run(command, timeoutSec: processTimeout)
+
+        if run.timedOut {
+            return errorPayload(
+                code: "PROCESS_TIMEOUT",
+                message: "kmsg download-file timed out",
+                hint: "Retry after ensuring KakaoTalk is responsive; raise stable_timeout_sec for slow downloads.",
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+
+        // CLI emits a single JSON object to stdout. Parse it and wrap meta.
+        if let payload = jsonObject(from: run.stdout) {
+            var response = payload
+            var meta = response["meta"] as? JSONDict ?? [:]
+            meta["latency_ms"] = run.latencyMs
+            if traceAX, !run.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                meta["stderr_trace"] = run.stderr
+            }
+            response["meta"] = meta
+            return response
+        }
+
+        // No JSON — fall back to extract code from stderr/stdout.
+        let code = extractErrorCode("\(run.stdout)\n\(run.stderr)")
+        return errorPayload(
+            code: code,
+            message: "kmsg download-file returned non-JSON output",
+            hint: mapHint(code),
+            rawStdout: run.stdout,
+            rawStderr: run.stderr,
+            latencyMs: run.latencyMs
+        )
     }
 
     private func errorPayload(
