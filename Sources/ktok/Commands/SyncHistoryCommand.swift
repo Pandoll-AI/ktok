@@ -163,22 +163,19 @@ struct SyncHistoryCommand: ParsableCommand {
             throw ExitCode.failure
         }
 
-        // Drive the Save panel. Cmd+Shift+G path override to expandedSaveDir.
-        let panelShown = SavePanelDriver.waitForSavePanel(timeoutSec: max(1.0, savePanelTimeout))
-        var savePanelOverridden = false
-        if panelShown {
-            if expandedSaveDir != defaultDownloads {
-                let (ok, _) = SavePanelDriver.overridePath(expandedSaveDir)
-                savePanelOverridden = ok
-                if !ok {
-                    SavePanelDriver.acceptDefault()
-                }
-            } else {
-                SavePanelDriver.acceptDefault()
-            }
-        } else {
-            runner.log("sync-history: Save panel did not appear within \(savePanelTimeout)s; KakaoTalk may have saved silently")
-        }
+        // DIAGNOSTIC: after pressing Save-as-text, KakaoTalk's actual
+        // behavior is to save directly to ~/Downloads without opening an
+        // NSSavePanel, then show a "successfully exported" confirmation
+        // dialog. The previous keystroke-based `overridePath` / `acceptDefault`
+        // calls were firing Cmd+Shift+G + Cmd+A + Cmd+V + Return + Return
+        // AT that confirmation dialog, producing rejected-keystroke dings.
+        //
+        // New policy: don't fire any keystrokes. Just wait for the file to
+        // land; the confirmation dialog is dismissed explicitly below after
+        // the file stabilizes (via AX AXPress on its OK button, not keys).
+        runner.log("sync-history: skipping NSSavePanel keystrokes — KakaoTalk saves silently to ~/Downloads")
+        let panelShown = false
+        let savePanelOverridden = false
 
         // Wait for new stable CSV.
         let clampedStable = max(1.0, min(300.0, stableTimeoutSec))
@@ -187,6 +184,12 @@ struct SyncHistoryCommand: ParsableCommand {
             baseline: baseline,
             timeoutSec: clampedStable
         )
+
+        // Dismiss the "Successfully exported your chat history" confirmation
+        // dialog via AX AXPress on its OK button. Using AXPress (not
+        // keystroke) avoids the system-beep that fires when keys are sent
+        // to a dialog that isn't accepting them yet.
+        _ = ExportDoneDialogDismisser.dismiss(kakao: kakao, runner: runner)
 
         guard let dumpPath = downloadedFile else {
             emitError(

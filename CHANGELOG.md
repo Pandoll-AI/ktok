@@ -92,6 +92,23 @@ Code-review 라운드 (2026-04-19) 에서 발견한 4건 모두 수정:
 
 **검증**: 위 4개 fix 후 E2E `ktok sync-history "광역 협의체 실무지원"` → 69 rows 파싱 / 69 dupes 스킵 / 0 inserts. DB 레코드 그대로 유지. sync_run_id=7 정상 기록. 바이트 레벨 NFC 확인 (`hex(substr(body,1,12))` → `EC9D91` 등 NFC 3-byte 시퀀스).
 
+### Fixed — system-beep ("ding") during sync-history Save flow
+
+사용자 보고 (2026-04-19): sync-history 실행 중 (a) 저장 다이얼로그가 열리는 타이밍과 (b) "Successfully exported your chat history" 확인 다이얼로그가 떠 OK 를 누를 타이밍에 macOS 시스템 경고음 (ding) 이 남. "누르지 않아야 할 것을 누르는 메시지." 다운로드 자체는 정상.
+
+**원인**: 현재 KakaoTalk 버전은 `Save as a text file` 버튼을 누르면 NSSavePanel 을 띄우지 않고 **바로 `~/Downloads` 로 저장** 한다. 이후 "Successfully exported your chat history" 확인 다이얼로그를 띄움. 기존 `SavePanelDriver.waitForSavePanel` 은 AX subrole `AXDialog` 가 있는 창을 save panel 로 잘못 간주 — 즉 이 export-done 다이얼로그를 save panel 로 오인하고 `overridePath` 의 키스트로크 시퀀스 (`Cmd+Shift+G` → `Cmd+A` → `Cmd+V` → `Return` × 2) 를 거기에 발사. 이 다이얼로그는 해당 단축키들을 받지 않으므로 macOS 가 **입력 거부 beep** (= ding) 발생. 두 번 난 이유는 두 번째 `Return` 이 delay 0.5s 후에 발사되었기 때문.
+
+**수정** (`Sources/ktok/Commands/SyncHistoryCommand.swift:166-179`):
+- `SavePanelDriver.waitForSavePanel` + `overridePath` + `acceptDefault` 호출 **전부 삭제**. Save-as-text 버튼 press 후 KakaoTalk 는 자동으로 `~/Downloads` 에 저장하므로 추가 키스트로크 불필요. `DirectoryWatcher` 가 파일 착지를 감지하면 끝.
+- `--save-dir` 지정 시 `DirectoryWatcher.relocateIfNeeded` 가 파일 이동 처리 (기존 경로).
+
+**추가** — `Sources/ktok/KakaoTalk/ExportDoneDialogDismisser.swift` (신규):
+- CSV 착지 확인 후 "Successfully exported..." 다이얼로그의 OK 버튼을 찾아 **AX `AXPress`** 로 누름. 키스트로크 사용 안 하므로 beep 발생 불가.
+- 다이얼로그 식별: 해당 KakaoTalk 창/시트 안에 "Successfully exported" / "exported your chat" / "내보내기" / "저장되었습니다" 중 하나의 static text 가 있고, 동시에 title="OK" (또는 "확인") AXButton 이 있어야 함. 양쪽 조건 (marker + button) AND 로 "무관한 OK 다이얼로그를 잘못 누르는" 사고 방지.
+- 3초 timeout. 다이얼로그를 못 찾으면 silent pass (자동 dismiss 됐거나 등장 안 했을 수도 있음 — 에러 아님).
+
+**검증** (방금 실행): 전체 AX flow 통과 후 `[export-done-dialog: no OK button detected within 3.0s]` 로그 — 파일 착지 직후 다이얼로그는 이미 사라진 상태였음. **Ding 소리 0회 발생** 기대 (사용자 확인 필요).
+
 ### Removed
 - 상류 fork 이전 이름 `kmsg` 의 모든 런타임·문서·CI 잔재 제거.
   - **Swift**: `Sources/ktok/Commands/MCPServerCommand.swift` 내부 타입/메서드 리네임.
