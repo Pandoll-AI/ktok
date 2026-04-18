@@ -1,13 +1,11 @@
 .DS_Store
 /.build
-/Packages
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 .claude/settings.local.json
-video/node_modules/
-video/out/
-__pycache__/
-*.py[cod]
+*.swp
+*.swo
+.idea/

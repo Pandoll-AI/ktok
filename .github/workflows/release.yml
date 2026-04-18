@@ -18,8 +18,8 @@ jobs:
   build-and-release:
     runs-on: macos-14
     env:
-      RELEASE_ASSET_NAME: kmsg-macos-universal
-      TAP_REPO: channprj/homebrew-tap
+      RELEASE_ASSET_NAME: ktok-macos-universal
+      TAP_REPO: Pandoll-AI/homebrew-tap
       TAP_REPO_REF: main
 
     steps:
@@ -93,8 +93,8 @@ jobs:
           ARM_BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
           X86_BIN_DIR="$(swift build -c release --arch x86_64 --show-bin-path)"
 
-          ARM_BIN="$ARM_BIN_DIR/kmsg"
-          X86_BIN="$X86_BIN_DIR/kmsg"
+          ARM_BIN="$ARM_BIN_DIR/ktok"
+          X86_BIN="$X86_BIN_DIR/ktok"
 
           test -f "$ARM_BIN"
           test -f "$X86_BIN"
@@ -155,16 +155,16 @@ jobs:
         if: steps.tap-sync.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_FILE: ${{ runner.temp }}/kmsg-homebrew-meta/tags.txt
-          JSON_FILE: ${{ runner.temp }}/kmsg-homebrew-meta/releases.json
-          DOWNLOAD_DIR: ${{ runner.temp }}/kmsg-homebrew-meta/downloads
+          TAG_FILE: ${{ runner.temp }}/ktok-homebrew-meta/tags.txt
+          JSON_FILE: ${{ runner.temp }}/ktok-homebrew-meta/releases.json
+          DOWNLOAD_DIR: ${{ runner.temp }}/ktok-homebrew-meta/downloads
         shell: bash
         run: |
           set -euo pipefail
 
           TAG="${{ steps.meta.outputs.tag }}"
           KEEP_VERSIONS=10
-          META_DIR="$RUNNER_TEMP/kmsg-homebrew-meta"
+          META_DIR="$RUNNER_TEMP/ktok-homebrew-meta"
           TAG_FILE="$META_DIR/tags.txt"
           JSON_FILE="$META_DIR/releases.json"
           DOWNLOAD_DIR="$META_DIR/downloads"
@@ -240,7 +240,7 @@ jobs:
             --asset-path "$GITHUB_WORKSPACE/$RELEASE_ASSET_NAME" \
             --repository "$GITHUB_REPOSITORY" \
             --current-tag "$TAG" \
-            --release-metadata-file "$RUNNER_TEMP/kmsg-homebrew-meta/releases.json" \
+            --release-metadata-file "$RUNNER_TEMP/ktok-homebrew-meta/releases.json" \
             --keep-versions 10
 
           cd "$TAP_DIR"
@@ -256,7 +256,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md Formula
-          git commit -m "chore(tap): sync kmsg formulas for $TAG"
+          git commit -m "chore(tap): sync ktok formulas for $TAG"
           git push origin HEAD:"$TAP_REPO_REF"
 
           {

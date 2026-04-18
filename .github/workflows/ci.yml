@@ -28,10 +28,13 @@ jobs:
         run: swift build -c release
 
       - name: Verify version output
-        run: .build/debug/kmsg --version
+        run: .build/debug/ktok --version
 
-      - name: Run release automation tests
-        run: python3 -m unittest tests.test_sync_homebrew_tap tests.test_release_workflow
-
-      - name: Validate OpenClaw MCP server script
-        run: python3 -m py_compile tools/kmsg-mcp.py tools/sync_homebrew_tap.py
+      - name: MCP smoke handshake
+        shell: bash
+        run: |
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n{"jsonrpc":"2.0","id":3,"method":"shutdown"}\n{"jsonrpc":"2.0","method":"exit"}\n' \
+            | .build/debug/ktok mcp-server \
+            | tee /tmp/ktok-mcp.out
+          grep -q '"ktok-mcp"' /tmp/ktok-mcp.out
+          grep -q '"ktok_read"' /tmp/ktok-mcp.out

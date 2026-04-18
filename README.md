@@ -16,38 +16,23 @@
 
 ---
 
-## 이게 왜 존재하나 — 기존 두 프로젝트와의 차이
+## ktok 이 채우는 빈틈
 
-이 fork 는 기존에 존재하던 **두 구현의 각각 빈틈** 을 채우려고 만들어졌다.
-
-### 상류: [channprj/kmsg](https://github.com/channprj/kmsg) (public, Swift)
-
-상류 CLI 는 아름답게 구조화된 ArgumentParser + Accessibility 래퍼이지만, 실무에서 쓰다 보면 다음이 아쉬웠다:
-
-| 항목 | channprj/kmsg | **ktok** |
-|---|---|---|
-| `send-file` (임의 파일 첨부 전송) | ❌ | ✅ |
-| `download-file` (첨부 다운로드 + 자동 스크롤) | ❌ | ✅ |
-| MCP 프레이밍 | LSP-style Content-Length **전용** | **auto-detect** (LSP + newline-delimited) |
-| Claude Code MCP 호환 | ❌ (handshake 실패) | ✅ |
-| 채팅 검색 시 탭 활성화 | ❌ (친구 탭 고정 → 그룹챗 검색 실패) | ✅ (`chatrooms` 탭 강제 활성화) |
-| `read` 툴 timeout | 8s / 15s (deep) — 종종 premature timeout | 20s / 40s |
-| `initialize.meta.startup_check` | ✅ | ✅ (유지) |
-
-### Python 래퍼: `kmsg-mcp-fix` (retired)
-
-예전에는 채팅방 파일 첨부 송수신을 위해 Python MCP 래퍼가 `channprj/kmsg` CLI 를 subprocess 로 호출하면서 **자기 안에서** NSPasteboard / JXA / Quartz / osascript 로 700+ 줄 벽타기를 직접 구현했다. 이 래퍼는 **은퇴** 했다.
-
-| 항목 | Python wrapper | **ktok** |
-|---|---|---|
-| 프로세스 모델 | `python3 kmsg-mcp.py` → `kmsg` subprocess → osascript/JXA subprocess | 단일 Swift 바이너리. in-process CGEvent/NSPasteboard |
-| 파일 전송 프로세스 hop | `pbcopy` + osascript + `kmsg` 등 최소 3단계 | NSPasteboard `writeObjects` + `setPropertyList` 1회 |
-| 의존성 | Python 3 + venv + channprj kmsg binary | ktok binary 만 |
-| argv 파라미터화 (injection 방지) | 일부 구간에서만 적용 | 사용자 입력 경로 **전면** (chat name, filename, save_dir) |
-| 저장소 수 | 2개 (동기화 필요) | 1개 |
-| `send-file` / `download-file` 구현 | Python 700+ 줄 | Swift ~1,300 줄 (타입 안전) |
-
-중요: Python 래퍼의 **검증된 AX 탐색 로직 자체는 버리지 않음**. 같은 AppleScript / JXA 스크립트 문자열을 Swift 소스에 복사해 `Process` 로 실행 — 언어만 바뀌고 AX 동작은 1:1 보존. 이 덕분에 parity 가 쉬웠고 regression 위험이 최소화됐다.
+| 항목 | ktok |
+|---|---|
+| `send-file` (임의 파일 첨부 전송) | ✅ |
+| `download-file` (첨부 다운로드 + 자동 스크롤 + Save 패널 driver) | ✅ |
+| MCP 프레이밍 | **auto-detect** (LSP Content-Length + newline-delimited) |
+| Claude Code MCP 호환 | ✅ |
+| 채팅 검색 시 탭 활성화 | ✅ (`chatrooms` 탭 강제 활성화) |
+| `read` 툴 timeout | 20s / 40s (deep) |
+| `initialize.meta.startup_check` | ✅ |
+| 프로세스 모델 | 단일 Swift 바이너리. in-process CGEvent / NSPasteboard |
+| 파일 전송 프로세스 hop | NSPasteboard `writeObjects` + `setPropertyList` 1회 |
+| 의존성 | ktok binary 만 |
+| argv 파라미터화 (injection 방지) | 사용자 입력 경로 **전면** (chat name, filename, save_dir) |
+| 저장소 수 | 1개 |
+| `send-file` / `download-file` 구현 | Swift ~1,300 줄 (타입 안전) |
 
 ---
 
@@ -216,4 +201,4 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 
 **개인 사용 전용 private fork**. 카카오톡 이용약관 준수, 스팸 / 대량 발송 / 자동 도배 금지. 계정 제재는 사용자 본인 책임. 업무용/상용 배포 목적 아님.
 
-원본 `channprj/kmsg` 의 라이선스 조건은 [upstream LICENSE](https://github.com/channprj/kmsg/blob/main/LICENSE) 를 참조.
+상류(upstream) 프로젝트의 라이선스 조건은 [upstream LICENSE](https://github.com/channprj/kmsg/blob/main/LICENSE) 를 참조.

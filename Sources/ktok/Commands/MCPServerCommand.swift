@@ -12,7 +12,7 @@ private struct MCPCommandResult {
     let timedOut: Bool
 }
 
-private struct KmsgMCPError: Error, @unchecked Sendable {
+private struct KtokMCPError: Error, @unchecked Sendable {
     let code: Int
     let message: String
     let data: JSONDict
@@ -24,7 +24,7 @@ private struct KmsgMCPError: Error, @unchecked Sendable {
     }
 }
 
-private final class KmsgSubprocessRunner {
+private final class KtokSubprocessRunner {
     let executablePath: String
 
     init() {
@@ -102,7 +102,7 @@ private final class KmsgSubprocessRunner {
                     "message": "ktok binary not executable",
                     "stdout": version.stdout,
                     "stderr": version.stderr,
-                    "kmsg_bin": executablePath,
+                    "ktok_bin": executablePath,
                 ]
             )
         }
@@ -116,7 +116,7 @@ private final class KmsgSubprocessRunner {
                     "message": "ktok status check failed",
                     "stdout": status.stdout,
                     "stderr": status.stderr,
-                    "kmsg_bin": executablePath,
+                    "ktok_bin": executablePath,
                 ]
             )
         }
@@ -124,16 +124,16 @@ private final class KmsgSubprocessRunner {
         return (
             true,
             [
-                "kmsg_bin": executablePath,
+                "ktok_bin": executablePath,
                 "version": version.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
             ]
         )
     }
 }
 
-private final class KmsgMCPServer {
+private final class KtokMCPServer {
     private let protocolVersion = "2024-11-05"
-    private let runner = KmsgSubprocessRunner()
+    private let runner = KtokSubprocessRunner()
     private let deepRecoveryDefault: Bool
     private let traceDefault: Bool
     private let serverVersion: String
@@ -159,7 +159,7 @@ private final class KmsgMCPServer {
                 if let response = try handleRequest(request) {
                     try writeMessage(response)
                 }
-            } catch let error as KmsgMCPError {
+            } catch let error as KtokMCPError {
                 guard let requestID else { continue }
                 try writeMessage(jsonRPCError(id: requestID, code: error.code, message: error.message, data: error.data))
             } catch {
@@ -232,13 +232,13 @@ private final class KmsgMCPServer {
             return nil
 
         default:
-            throw KmsgMCPError(code: -32601, message: "Method not found: \(method ?? "")")
+            throw KtokMCPError(code: -32601, message: "Method not found: \(method ?? "")")
         }
     }
 
     private func ensureInitialized() throws {
         if !initialized {
-            throw KmsgMCPError(code: -32002, message: "Server not initialized")
+            throw KtokMCPError(code: -32002, message: "Server not initialized")
         }
     }
 
@@ -421,17 +421,17 @@ private final class KmsgMCPServer {
         let resultObject: JSONDict
         switch name {
         case "ktok_read":
-            resultObject = callKmsgRead(arguments)
+            resultObject = callKtokRead(arguments)
         case "ktok_send":
-            resultObject = callKmsgSend(arguments)
+            resultObject = callKtokSend(arguments)
         case "ktok_send_image":
-            resultObject = callKmsgSendImage(arguments)
+            resultObject = callKtokSendImage(arguments)
         case "ktok_send_file":
-            resultObject = callKmsgSendFile(arguments)
+            resultObject = callKtokSendFile(arguments)
         case "ktok_download_file":
-            resultObject = callKmsgDownloadFile(arguments)
+            resultObject = callKtokDownloadFile(arguments)
         default:
-            throw KmsgMCPError(code: -32601, message: "Unknown tool: \(name)")
+            throw KtokMCPError(code: -32601, message: "Unknown tool: \(name)")
         }
 
         return [
@@ -441,7 +441,7 @@ private final class KmsgMCPServer {
         ]
     }
 
-    private func callKmsgRead(_ arguments: JSONDict) -> JSONDict {
+    private func callKtokRead(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if chat.isEmpty {
             return errorPayload(
@@ -561,7 +561,7 @@ private final class KmsgMCPServer {
         return response
     }
 
-    private func callKmsgSend(_ arguments: JSONDict) -> JSONDict {
+    private func callKtokSend(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let message = String(describing: arguments["message"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let confirm = boolValue(arguments["confirm"], defaultValue: false)
@@ -637,7 +637,7 @@ private final class KmsgMCPServer {
         return response
     }
 
-    private func callKmsgSendImage(_ arguments: JSONDict) -> JSONDict {
+    private func callKtokSendImage(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let imagePath = String(describing: arguments["image_path"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let confirm = boolValue(arguments["confirm"], defaultValue: false)
@@ -724,7 +724,7 @@ private final class KmsgMCPServer {
         return response
     }
 
-    private func callKmsgSendFile(_ arguments: JSONDict) -> JSONDict {
+    private func callKtokSendFile(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let filePath = String(describing: arguments["file_path"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let confirm = boolValue(arguments["confirm"], defaultValue: false)
@@ -811,7 +811,7 @@ private final class KmsgMCPServer {
         return response
     }
 
-    private func callKmsgDownloadFile(_ arguments: JSONDict) -> JSONDict {
+    private func callKtokDownloadFile(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if chat.isEmpty {
             return errorPayload(
@@ -1117,7 +1117,7 @@ struct MCPServerCommand: ParsableCommand {
     )
 
     func run() throws {
-        let server = KmsgMCPServer()
+        let server = KtokMCPServer()
         try server.serveForever()
     }
 }
