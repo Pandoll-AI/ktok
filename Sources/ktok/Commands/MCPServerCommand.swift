@@ -199,7 +199,7 @@ private final class KtokMCPServer {
                         "name": "ktok-mcp",
                         "version": serverVersion,
                     ],
-                    "instructions": "Use ktok_read for read-only operations. Use ktok_send, ktok_send_image, and ktok_send_file with confirm=false (or omitted) for sending. Use confirm=true to intentionally require a confirmation step. Use ktok_download_file to pull a file attachment from a chat.",
+                    "instructions": "Use ktok_read for recent messages, ktok_send/ktok_send_image/ktok_send_file for sending (confirm=true triggers a pre-send confirmation step), ktok_download_file to pull an attachment. For persistent full-history search, use ktok_sync_history (AX-driven CSV export + DB upsert), ktok_import_history (import an existing CSV without AX), and ktok_query_history (filter by chat/kind/author/time range/body).",
                     "meta": [
                         "startup_check": startupCheck,
                     ],
@@ -367,6 +367,126 @@ private final class KtokMCPServer {
                 ],
             ],
             [
+                "name": "ktok_sync_history",
+                "description": "Download the full chat history (CSV) via KakaoTalk's native export and upsert into ktok's SQLite DB. Drives the hamburger menu → Manage Chats → Save as a text file UI path. Idempotent via SHA-256 dedupe.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "chat": ["type": "string", "description": "Chat room or user name"],
+                        "my_kakao_id": [
+                            "type": "string",
+                            "description": "Your own KakaoTalk display name — tags attachment direction (sent/received)",
+                        ],
+                        "save_dir": [
+                            "type": "string",
+                            "default": "/tmp/ktok/dumps",
+                            "description": "Directory for the CSV dump",
+                        ],
+                        "stable_timeout_sec": [
+                            "type": "number",
+                            "minimum": 1,
+                            "maximum": 300,
+                            "default": 40,
+                            "description": "Seconds to wait for CSV to stabilize",
+                        ],
+                        "confirm": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "If true, do not run and return CONFIRMATION_REQUIRED",
+                        ],
+                        "keep_window": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Keep chat window open after sync",
+                        ],
+                        "trace_ax": [
+                            "type": "boolean",
+                            "default": traceDefault,
+                            "description": "Include AX tracing logs",
+                        ],
+                    ],
+                    "required": ["chat"],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "ktok_import_history",
+                "description": "Import an existing KakaoTalk CSV export into ktok's SQLite DB without invoking KakaoTalk AX. Useful for historical backfill.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "file_path": ["type": "string", "description": "Absolute path to the KakaoTalk CSV file"],
+                        "chat_name": [
+                            "type": "string",
+                            "description": "Chat display name (omit to derive from filename)",
+                        ],
+                        "chat_id": [
+                            "type": "string",
+                            "description": "Explicit chat_id (else derived from chat_name SHA-256)",
+                        ],
+                        "my_kakao_id": [
+                            "type": "string",
+                            "description": "Your own KakaoTalk display name — tags attachment direction",
+                        ],
+                    ],
+                    "required": ["file_path"],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "ktok_query_history",
+                "description": "Query the local ktok message DB populated by ktok_sync_history / ktok_import_history. Filter by chat, time range, kind, author, or free-text body. Returns the rows in JSON structuredContent.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "chat_name": [
+                            "type": "string",
+                            "description": "Filter to a specific chat (omit for cross-chat search)",
+                        ],
+                        "since": [
+                            "type": "string",
+                            "description": "ISO-8601 lower bound, inclusive (YYYY-MM-DD or full ISO-8601)",
+                        ],
+                        "until": [
+                            "type": "string",
+                            "description": "ISO-8601 upper bound, inclusive",
+                        ],
+                        "kinds": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Filter to kinds: text, image, file, voice, video, emoticon, system, other",
+                        ],
+                        "authors": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Filter to specific author names",
+                        ],
+                        "query": [
+                            "type": "string",
+                            "description": "Substring search on message body (or filename if attachments=true)",
+                        ],
+                        "limit": [
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 5_000,
+                            "default": 50,
+                            "description": "Max rows to return",
+                        ],
+                        "attachments": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Query attachments table instead of messages",
+                        ],
+                        "oldest_first": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Return oldest-first (default is newest-first)",
+                        ],
+                    ],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
                 "name": "ktok_download_file",
                 "description": "Download a file attachment from a KakaoTalk chat. Scrolls up to find the attachment, presses Save, and waits for the file to appear in save_dir.",
                 "inputSchema": [
@@ -430,6 +550,12 @@ private final class KtokMCPServer {
             resultObject = callKtokSendFile(arguments)
         case "ktok_download_file":
             resultObject = callKtokDownloadFile(arguments)
+        case "ktok_sync_history":
+            resultObject = callKtokSyncHistory(arguments)
+        case "ktok_import_history":
+            resultObject = callKtokImportHistory(arguments)
+        case "ktok_query_history":
+            resultObject = callKtokQueryHistory(arguments)
         default:
             throw KtokMCPError(code: -32601, message: "Unknown tool: \(name)")
         }
@@ -895,6 +1021,195 @@ private final class KtokMCPServer {
             code: code,
             message: "ktok download-file returned non-JSON output",
             hint: mapHint(code),
+            rawStdout: run.stdout,
+            rawStderr: run.stderr,
+            latencyMs: run.latencyMs
+        )
+    }
+
+    private func callKtokSyncHistory(_ arguments: JSONDict) -> JSONDict {
+        let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if chat.isEmpty {
+            return errorPayload(code: "INVALID_ARGUMENT", message: "chat is required", hint: "Provide a chat name.", rawStdout: "", rawStderr: "", latencyMs: 0)
+        }
+
+        let confirm = boolValue(arguments["confirm"], defaultValue: false)
+        if confirm {
+            return errorPayload(
+                code: "CONFIRMATION_REQUIRED",
+                message: "ktok_sync_history blocked because confirm=true",
+                hint: "Ask user for explicit approval, then call again with confirm=false.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        let saveDir = String(describing: arguments["save_dir"] ?? "/tmp/ktok/dumps")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let myKakaoId = (arguments["my_kakao_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keepWindow = boolValue(arguments["keep_window"], defaultValue: false)
+        let traceAX = boolValue(arguments["trace_ax"], defaultValue: traceDefault)
+        let stableTimeout: Double = {
+            if let d = arguments["stable_timeout_sec"] as? Double { return max(1.0, min(300.0, d)) }
+            if let i = arguments["stable_timeout_sec"] as? Int { return max(1.0, min(300.0, Double(i))) }
+            return 40.0
+        }()
+
+        var command = ["sync-history", chat, "--json",
+                       "--save-dir", saveDir,
+                       "--stable-timeout-sec", String(stableTimeout)]
+        if let myKakaoId, !myKakaoId.isEmpty {
+            command.append(contentsOf: ["--my-kakao-id", myKakaoId])
+        }
+        if keepWindow { command.append("--keep-window") }
+        if traceAX { command.append("--trace-ax") }
+
+        // Sync pipeline = AX open + settings nav + Save panel + file stabilize
+        // + parse + upsert. Generous timeout because each AX step has polling
+        // windows that add up.
+        let processTimeout = max(60.0, stableTimeout + 30.0)
+        let run = runner.run(command, timeoutSec: processTimeout)
+
+        if run.timedOut {
+            return errorPayload(
+                code: "PROCESS_TIMEOUT",
+                message: "ktok sync-history timed out",
+                hint: "Raise stable_timeout_sec or retry after ensuring KakaoTalk is responsive.",
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+
+        if let payload = jsonObject(from: run.stdout) {
+            var response = payload
+            var meta = response["meta"] as? JSONDict ?? [:]
+            meta["latency_ms"] = run.latencyMs
+            if traceAX, !run.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                meta["stderr_trace"] = run.stderr
+            }
+            response["meta"] = meta
+            return response
+        }
+
+        let code = extractErrorCode("\(run.stdout)\n\(run.stderr)")
+        return errorPayload(
+            code: code,
+            message: "ktok sync-history returned non-JSON output",
+            hint: mapHint(code),
+            rawStdout: run.stdout,
+            rawStderr: run.stderr,
+            latencyMs: run.latencyMs
+        )
+    }
+
+    private func callKtokImportHistory(_ arguments: JSONDict) -> JSONDict {
+        let filePath = String(describing: arguments["file_path"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if filePath.isEmpty {
+            return errorPayload(code: "INVALID_ARGUMENT", message: "file_path is required", hint: "Provide a CSV file path.", rawStdout: "", rawStderr: "", latencyMs: 0)
+        }
+
+        let expanded = (filePath as NSString).expandingTildeInPath
+        let absolute = URL(fileURLWithPath: expanded).standardizedFileURL.path
+
+        var command = ["import-history", absolute, "--json"]
+        if let name = arguments["chat_name"] as? String, !name.isEmpty {
+            command.append(contentsOf: ["--chat-name", name])
+        }
+        if let chatId = arguments["chat_id"] as? String, !chatId.isEmpty {
+            command.append(contentsOf: ["--chat-id", chatId])
+        }
+        if let myKakaoId = arguments["my_kakao_id"] as? String, !myKakaoId.isEmpty {
+            command.append(contentsOf: ["--my-kakao-id", myKakaoId])
+        }
+
+        let run = runner.run(command, timeoutSec: 30.0)
+        if run.timedOut {
+            return errorPayload(
+                code: "PROCESS_TIMEOUT",
+                message: "ktok import-history timed out",
+                hint: "Large CSV files may exceed 30s; run the CLI directly for diagnostics.",
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+        if let payload = jsonObject(from: run.stdout) {
+            var response = payload
+            var meta = response["meta"] as? JSONDict ?? [:]
+            meta["latency_ms"] = run.latencyMs
+            response["meta"] = meta
+            return response
+        }
+        return errorPayload(
+            code: "IMPORT_FAILED",
+            message: "ktok import-history returned non-JSON output",
+            hint: "Run `ktok import-history \(absolute) --json` in the shell for diagnostics.",
+            rawStdout: run.stdout,
+            rawStderr: run.stderr,
+            latencyMs: run.latencyMs
+        )
+    }
+
+    private func callKtokQueryHistory(_ arguments: JSONDict) -> JSONDict {
+        var command: [String] = ["history"]
+        if let name = arguments["chat_name"] as? String, !name.isEmpty {
+            command.append(name)
+        }
+        if let since = arguments["since"] as? String, !since.isEmpty {
+            command.append(contentsOf: ["--since", since])
+        }
+        if let until = arguments["until"] as? String, !until.isEmpty {
+            command.append(contentsOf: ["--until", until])
+        }
+        if let kinds = arguments["kinds"] as? [String], !kinds.isEmpty {
+            command.append("--kind")
+            command.append(contentsOf: kinds)
+        }
+        if let authors = arguments["authors"] as? [String], !authors.isEmpty {
+            command.append("--author")
+            command.append(contentsOf: authors)
+        }
+        if let query = arguments["query"] as? String, !query.isEmpty {
+            command.append(contentsOf: ["--query", query])
+        }
+        let limit: Int = {
+            if let i = arguments["limit"] as? Int { return max(1, min(5_000, i)) }
+            if let d = arguments["limit"] as? Double { return max(1, min(5_000, Int(d))) }
+            return 50
+        }()
+        command.append(contentsOf: ["--limit", String(limit)])
+        if boolValue(arguments["attachments"], defaultValue: false) {
+            command.append("--attachments")
+        }
+        if boolValue(arguments["oldest_first"], defaultValue: false) {
+            command.append("--oldest-first")
+        }
+        command.append("--json")
+
+        let run = runner.run(command, timeoutSec: 10.0)
+        if run.timedOut {
+            return errorPayload(
+                code: "PROCESS_TIMEOUT",
+                message: "ktok history query timed out",
+                hint: "Narrow the filter (shorter time range, smaller limit).",
+                rawStdout: run.stdout,
+                rawStderr: run.stderr,
+                latencyMs: run.latencyMs
+            )
+        }
+        if let payload = jsonObject(from: run.stdout) {
+            var response = payload
+            var meta = response["meta"] as? JSONDict ?? [:]
+            meta["latency_ms"] = run.latencyMs
+            response["meta"] = meta
+            return response
+        }
+        return errorPayload(
+            code: "QUERY_FAILED",
+            message: "ktok history returned non-JSON output",
+            hint: "Run `ktok history --json ...` in the shell for diagnostics.",
             rawStdout: run.stdout,
             rawStderr: run.stderr,
             latencyMs: run.latencyMs

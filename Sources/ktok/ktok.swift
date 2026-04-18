@@ -39,6 +39,10 @@ struct Ktok: ParsableCommand {
             ReadCommand.self,
             WatchCommand.self,
             CacheCommand.self,
+            ImportHistoryCommand.self,
+            HistoryCommand.self,
+            SyncHistoryCommand.self,
+            DumpChatUICommand.self,
             MCPServerCommand.self,
         ],
         defaultSubcommand: StatusCommand.self
