@@ -6,17 +6,18 @@ struct SyncHistoryCommand: ParsableCommand {
         commandName: "sync-history",
         abstract: "Download full chat history via AX and upsert into the ktok database",
         discussion: """
-            Drives KakaoTalk's "Save as a text file" flow:
-              1. Opens the chat
-              2. Clicks the hamburger in the chat window's top-right
-              3. Clicks "Manage Chats" in the left panel
-              4. Clicks "Save as a text file"
-              5. Overrides the Save panel's destination to --save-dir
-              6. Waits for the CSV to land, then parses + upserts
+            Drives KakaoTalk's "Save as a text file" flow end-to-end:
+              1. Opens the chat (via ChatWindowResolver)
+              2. ChatSettingsNavigator.runExportFlow:
+                 hamburger → Chatroom Settings → Manage Chats tab → Save
+                 as a text file → Save button in NSSavePanel
+              3. DirectoryWatcher waits for CSV to land in ~/Downloads
+              4. Dismisses the "Successfully exported" confirmation dialog
+              5. Relocates to --save-dir if different
+              6. Parses + upserts into the local SQLite DB
 
-            Messages are deduplicated by SHA-256(chat_id|sent_at|author|body),
-            so running sync-history repeatedly is safe — only new messages
-            are inserted. Attachments only record on fresh insert.
+            Dedup is SHA-256(chat_id|sent_at|author|body), so re-running is
+            idempotent — same data exits with 0 new inserts.
 
             Examples:
               ktok sync-history "채팅방"
@@ -55,6 +56,18 @@ struct SyncHistoryCommand: ParsableCommand {
     @Flag(name: .long, help: "Block execution, return CONFIRMATION_REQUIRED (MCP confirm flow)")
     var confirm: Bool = false
 
+    @Flag(name: .customLong("no-dismiss-dialog"), help: "Debug only: skip AX press on the 'Successfully exported' OK dialog.")
+    var noDismissDialog: Bool = false
+
+    @Flag(name: .customLong("skip-save-press"), help: "Debug only: stop before pressing Save in NSSavePanel — user must click Save manually.")
+    var skipSavePress: Bool = false
+
+    @Flag(name: .customLong("stop-before-save-as-text"), help: "Debug only: stop after reaching the Manage Chats tab but BEFORE pressing 'Save as a text file'. User manually clicks Save-as-text. Isolates whether a beep originates from our save-as-text AXPress.")
+    var stopBeforeSaveAsText: Bool = false
+
+    @Flag(name: .customLong("debug-slow"), help: "Debug only: insert 2-second pauses between each AX step so a human can follow the flow + verify whether 'Cannot complete' errors resolve with longer idle time before the press.")
+    var debugSlow: Bool = false
+
     func validate() throws {
         if chatName.isEmpty {
             throw ValidationError("Chat name is required.")
@@ -64,29 +77,23 @@ struct SyncHistoryCommand: ParsableCommand {
     func run() throws {
         let start = Date()
 
+        // --- Preconditions ---
         if confirm {
-            emitError(
-                code: "CONFIRMATION_REQUIRED",
-                message: "ktok sync-history blocked because --confirm is set",
-                hint: "Ask user for explicit approval, then re-run without --confirm.",
-                start: start
-            )
+            emitError(code: "CONFIRMATION_REQUIRED",
+                      message: "ktok sync-history blocked because --confirm is set",
+                      hint: "Ask user for explicit approval, then re-run without --confirm.",
+                      start: start)
             throw ExitCode.failure
         }
-
         guard AccessibilityPermission.ensureGranted() else {
             AccessibilityPermission.printInstructions()
             throw ExitCode.failure
         }
 
-        // Expand save-dir and ensure it exists before the Save panel lands.
+        // --- Setup: save dir, AX runner, KakaoTalk, chat resolver ---
         let expandedSaveDir = URL(fileURLWithPath: (saveDir as NSString).expandingTildeInPath).standardizedFileURL.path
-        do {
-            try FileManager.default.createDirectory(atPath: expandedSaveDir, withIntermediateDirectories: true)
-        } catch {
-            emitError(code: "INVALID_ARGUMENT", message: "Cannot create save-dir: \(error)", start: start)
-            throw ExitCode.failure
-        }
+        let downloadsDir = URL(fileURLWithPath: ("~/Downloads" as NSString).expandingTildeInPath).standardizedFileURL.path
+        try? FileManager.default.createDirectory(atPath: expandedSaveDir, withIntermediateDirectories: true)
 
         let runner = AXActionRunner(traceEnabled: traceAX)
         let kakao: KakaoTalkApp
@@ -97,121 +104,70 @@ struct SyncHistoryCommand: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let resolver = ChatWindowResolver(
-            kakao: kakao,
-            runner: runner,
-            useCache: true,
-            deepRecoveryEnabled: deepRecovery
-        )
-
+        let resolver = ChatWindowResolver(kakao: kakao, runner: runner, useCache: true, deepRecoveryEnabled: deepRecovery)
         let resolution: ChatWindowResolution
-        let resolvedWindowTitle: String
         do {
             resolution = try resolver.resolve(query: chatName)
-            resolvedWindowTitle = resolution.window.title ?? chatName
-            runner.log("sync-history: chat window resolved title='\(resolvedWindowTitle)'")
         } catch {
             emitError(code: "CHAT_NOT_FOUND", message: "\(error)", start: start)
             throw ExitCode.failure
         }
-
-        defer {
-            if !keepWindow {
-                _ = resolver.closeWindow(resolution.window)
-            }
-        }
+        let resolvedWindowTitle = resolution.window.title ?? chatName
+        defer { if !keepWindow { _ = resolver.closeWindow(resolution.window) } }
 
         kakao.activate()
         Thread.sleep(forTimeInterval: 0.4)
 
-        let navigator = ChatSettingsNavigator(kakao: kakao, runner: runner)
+        // --- Snapshot watched dirs BEFORE triggering the export ---
+        // KakaoTalk always saves to ~/Downloads regardless of --save-dir.
+        // Relocation is handled post-landing. We watch both dirs so a user
+        // who configures an alternative --save-dir doesn't miss files that
+        // land in Downloads first.
+        let watchedDirs = (expandedSaveDir != downloadsDir && FileManager.default.fileExists(atPath: downloadsDir))
+            ? [expandedSaveDir, downloadsDir]
+            : [expandedSaveDir]
+        let baseline = Dictionary(uniqueKeysWithValues: watchedDirs.map { ($0, DirectoryWatcher.snapshot($0)) })
 
-        // Snapshot the save-dir before pressing Save so DirectoryWatcher can
-        // identify the newly-landed CSV. We watch BOTH the explicit save-dir
-        // and ~/Downloads because KakaoTalk sometimes ignores the Cmd+Shift+G
-        // override and falls back to its default path.
-        let defaultDownloads = URL(fileURLWithPath: ("~/Downloads" as NSString).expandingTildeInPath).standardizedFileURL.path
-        var watchedDirs: [String] = [expandedSaveDir]
-        if expandedSaveDir != defaultDownloads,
-           FileManager.default.fileExists(atPath: defaultDownloads) {
-            watchedDirs.append(defaultDownloads)
-        }
-        var baseline: [String: DirectoryWatcher.Snapshot] = [:]
-        for dir in watchedDirs {
-            baseline[dir] = DirectoryWatcher.snapshot(dir)
-        }
-
-        // Drive the three-step UI path. Any step failure aborts with a code.
-        let settingsRoot: UIElement
-        do {
-            settingsRoot = try navigator.openChatSettings(in: resolution.window)
-        } catch let err as ChatSettingsNavigatorError {
-            emitError(code: "AX_HAMBURGER_FAILED", message: err.description, start: start)
-            throw ExitCode.failure
-        } catch {
-            emitError(code: "AX_HAMBURGER_FAILED", message: String(describing: error), start: start)
-            throw ExitCode.failure
-        }
-
-        do {
-            try navigator.clickManageChatsAndSaveAsText(in: settingsRoot, chatWindow: resolution.window)
-        } catch let err as ChatSettingsNavigatorError {
-            emitError(code: "AX_SAVE_BUTTON_FAILED", message: err.description, start: start)
-            throw ExitCode.failure
-        } catch {
-            emitError(code: "AX_SAVE_BUTTON_FAILED", message: String(describing: error), start: start)
-            throw ExitCode.failure
-        }
-
-        // DIAGNOSTIC: after pressing Save-as-text, KakaoTalk's actual
-        // behavior is to save directly to ~/Downloads without opening an
-        // NSSavePanel, then show a "successfully exported" confirmation
-        // dialog. The previous keystroke-based `overridePath` / `acceptDefault`
-        // calls were firing Cmd+Shift+G + Cmd+A + Cmd+V + Return + Return
-        // AT that confirmation dialog, producing rejected-keystroke dings.
-        //
-        // New policy: don't fire any keystrokes. Just wait for the file to
-        // land; the confirmation dialog is dismissed explicitly below after
-        // the file stabilizes (via AX AXPress on its OK button, not keys).
-        runner.log("sync-history: skipping NSSavePanel keystrokes — KakaoTalk saves silently to ~/Downloads")
-        let panelShown = false
-        let savePanelOverridden = false
-
-        // Wait for new stable CSV.
-        let clampedStable = max(1.0, min(300.0, stableTimeoutSec))
-        let downloadedFile = DirectoryWatcher.waitForNewStableFile(
-            dirs: watchedDirs,
-            baseline: baseline,
-            timeoutSec: clampedStable
+        // --- Drive the AX export flow (single call) ---
+        let navigator = ChatSettingsNavigator(
+            kakao: kakao,
+            runner: runner,
+            interStepDelay: debugSlow ? 2.0 : 0.0
         )
-
-        // Dismiss the "Successfully exported your chat history" confirmation
-        // dialog via AX AXPress on its OK button. Using AXPress (not
-        // keystroke) avoids the system-beep that fires when keys are sent
-        // to a dialog that isn't accepting them yet.
-        _ = ExportDoneDialogDismisser.dismiss(kakao: kakao, runner: runner)
-
-        guard let dumpPath = downloadedFile else {
-            emitError(
-                code: "DUMP_NOT_OBSERVED",
-                message: "Save flow completed but no new stable CSV appeared within \(Int(clampedStable))s",
-                hint: "Watched: \(watchedDirs). Raise --stable-timeout-sec or check Save panel manually.",
-                start: start
+        do {
+            try navigator.runExportFlow(
+                chatWindow: resolution.window,
+                skipSavePress: skipSavePress,
+                stopBeforeSaveAsText: stopBeforeSaveAsText
             )
+        } catch let err as ChatSettingsNavigatorError {
+            emitError(code: axErrorCode(for: err), message: err.description, start: start)
+            throw ExitCode.failure
+        } catch {
+            emitError(code: "AX_EXPORT_FLOW_FAILED", message: String(describing: error), start: start)
             throw ExitCode.failure
         }
 
-        // Relocate to save-dir if it landed in ~/Downloads and user wanted elsewhere.
-        var finalPath = dumpPath
-        if expandedSaveDir != defaultDownloads,
-           URL(fileURLWithPath: dumpPath).deletingLastPathComponent().path != expandedSaveDir,
-           !savePanelOverridden {
-            finalPath = DirectoryWatcher.relocateIfNeeded(dumpPath, preferredDir: expandedSaveDir)
+        // --- Wait for the CSV to land ---
+        let clampedStable = max(1.0, min(300.0, stableTimeoutSec))
+        guard let dumpPath = DirectoryWatcher.waitForNewStableFile(dirs: watchedDirs, baseline: baseline, timeoutSec: clampedStable) else {
+            emitError(code: "DUMP_NOT_OBSERVED",
+                      message: "Save flow completed but no new stable CSV appeared within \(Int(clampedStable))s",
+                      hint: "Watched: \(watchedDirs). Raise --stable-timeout-sec.",
+                      start: start)
+            throw ExitCode.failure
         }
 
-        runner.log("sync-history: dump saved at \(finalPath)")
+        // --- Dismiss the "Successfully exported" dialog (unless skipped) ---
+        if !noDismissDialog {
+            _ = navigator.dismissExportDoneDialog()
+        }
 
-        // Parse + upsert via the shared HistoryImporter.
+        // --- Relocate + import ---
+        let finalPath = (expandedSaveDir == downloadsDir)
+            ? dumpPath
+            : DirectoryWatcher.relocateIfNeeded(dumpPath, preferredDir: expandedSaveDir)
+
         let db: Database
         do {
             db = try Database(path: Database.defaultPath())
@@ -231,12 +187,22 @@ struct SyncHistoryCommand: ParsableCommand {
         }
 
         let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
-        emitSuccess(result: result, savePanelOverridden: savePanelOverridden, panelShown: panelShown, latencyMs: latencyMs)
+        emitSuccess(result: result, latencyMs: latencyMs)
+    }
+
+    private func axErrorCode(for err: ChatSettingsNavigatorError) -> String {
+        switch err {
+        case .hamburgerNotFound:                return "AX_HAMBURGER_FAILED"
+        case .chatroomSettingsMenuItemNotFound: return "AX_SETTINGS_MENU_FAILED"
+        case .settingsPanelNeverAppeared:       return "AX_SETTINGS_PANEL_FAILED"
+        case .manageChatsNotFound:              return "AX_MANAGE_CHATS_FAILED"
+        case .saveButtonNotFound:               return "AX_SAVE_BUTTON_FAILED"
+        }
     }
 
     // MARK: - Output
 
-    private func emitSuccess(result: HistoryImporter.Result, savePanelOverridden: Bool, panelShown: Bool, latencyMs: Int) {
+    private func emitSuccess(result: HistoryImporter.Result, latencyMs: Int) {
         if json {
             let payload: [String: Any] = [
                 "ok": true,
@@ -249,8 +215,6 @@ struct SyncHistoryCommand: ParsableCommand {
                 "attachments_inserted": result.attachmentsInserted,
                 "rejected_rows": result.parsedDump.rejectedRows.count,
                 "sync_run_id": result.syncRunId,
-                "save_panel_shown": panelShown,
-                "save_panel_overridden": savePanelOverridden,
                 "db_path": Database.defaultPath(),
                 "meta": ["latency_ms": latencyMs],
             ]

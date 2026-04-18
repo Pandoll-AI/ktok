@@ -103,4 +103,76 @@ enum SavePanelDriver {
         """
         _ = AppleScriptRunner.runAppleScript(script, timeoutSec: 3.0)
     }
+
+    /// Press the Save button in the NSSavePanel using AX AXPress (no
+    /// keystroke, no system beep). Searches the entire KakaoTalk AX
+    /// hierarchy for a button whose title is "Save" / "저장" — this
+    /// covers both standalone panel windows and sheets attached to the
+    /// settings window.
+    ///
+    /// Returns true if a Save button was successfully pressed. Falls
+    /// back to `acceptDefault()` (keystroke return) if AX press misses
+    /// — this is still usable as a last resort even though it may beep
+    /// on some KakaoTalk versions.
+    @discardableResult
+    static func pressSaveButtonViaAX(kakao: KakaoTalkApp, runner: AXActionRunner, timeoutSec: TimeInterval = 2.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSec)
+        let saveTitles: Set<String> = ["Save", "저장", "Download", "다운로드"]
+
+        while Date() < deadline {
+            let roots: [UIElement] = kakao.windows + [kakao.applicationElement]
+            for root in roots {
+                let buttons = root.findAll(role: kAXButtonRole, limit: 80, maxNodes: 600)
+                guard let save = buttons.first(where: { saveTitles.contains(($0.title ?? "").trimmingCharacters(in: .whitespaces)) }) else {
+                    continue
+                }
+
+                // Before pressing: find the enclosing window and raise it
+                // so the Save panel gains focus. Pressing an unfocused
+                // button produces a macOS beep even when the press itself
+                // "succeeds" — the system treats it as a background-app
+                // interaction and plays the alert sound.
+                if let panelWindow = findEnclosingWindow(for: save) {
+                    if let actions = try? panelWindow.actionNames(), actions.contains(kAXRaiseAction) {
+                        do {
+                            try panelWindow.performAction(kAXRaiseAction)
+                            runner.log("save-panel: raised enclosing window before AX press")
+                        } catch {
+                            runner.log("save-panel: AXRaise failed (\(error)); continuing anyway")
+                        }
+                    }
+                    // Also activate the app in case focus is on another app.
+                    kakao.activate()
+                    Thread.sleep(forTimeInterval: 0.12)
+                }
+
+                do {
+                    try save.press()
+                    runner.log("save-panel: pressed Save button via AX (title='\(save.title ?? "")')")
+                    return true
+                } catch {
+                    runner.log("save-panel: AX press on Save failed (\(error))")
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.12)
+        }
+        runner.log("save-panel: Save button not found via AX within \(timeoutSec)s")
+        return false
+    }
+
+    /// Walk up an element's parent chain to find the enclosing AXWindow.
+    /// The Save button lives inside an AXSheet inside AXWindow (for a
+    /// sheet-style save panel) OR directly inside AXWindow (standalone).
+    private static func findEnclosingWindow(for element: UIElement) -> UIElement? {
+        var cursor: UIElement? = element
+        var hops = 0
+        while let current = cursor, hops < 12 {
+            if current.role == kAXWindowRole {
+                return current
+            }
+            cursor = current.parent
+            hops += 1
+        }
+        return nil
+    }
 }

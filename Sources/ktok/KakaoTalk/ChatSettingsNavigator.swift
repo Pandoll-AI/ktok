@@ -39,6 +39,165 @@ enum ChatSettingsNavigatorError: Error, CustomStringConvertible {
 struct ChatSettingsNavigator {
     let kakao: KakaoTalkApp
     let runner: AXActionRunner
+    /// Extra idle time inserted between steps when set > 0. Used by the
+    /// `--debug-slow` flag to let the AX tree fully settle between presses,
+    /// helping isolate whether "Cannot complete" first-press failures are
+    /// caused by UI transition timing.
+    var interStepDelay: TimeInterval = 0.0
+
+    private func slowPause(_ label: String) {
+        guard interStepDelay > 0 else { return }
+        runner.log("\(label): slow-pause \(interStepDelay)s")
+        Thread.sleep(forTimeInterval: interStepDelay)
+    }
+
+    // MARK: - Single-call orchestration
+
+    /// Drive the full KakaoTalk "Save as a text file" flow from a chat
+    /// window through Save-panel confirmation. Linear steps, each logs:
+    ///   1. Press hamburger (desc='Menu') in chat window → opens popover
+    ///   2. Press "Chatroom Settings" in popover → opens settings window
+    ///   3. Activate the Manage Chats sidebar tab (tries sidebar tabs until
+    ///      "Save as a text file" button becomes visible)
+    ///   4. Press "Save as a text file" button → opens NSSavePanel
+    ///   5. Press "Save" button in the NSSavePanel → file saves to
+    ///      ~/Downloads
+    ///
+    /// Callers then wait for the file to land via DirectoryWatcher and
+    /// (optionally) call `dismissExportDoneDialog()` to close the
+    /// "Successfully exported" confirmation.
+    ///
+    /// - Parameter skipSavePress: diagnostic — if true, stops before step
+    ///   5 (NSSavePanel Save press). User manually presses Save.
+    /// - Parameter stopBeforeSaveAsText: diagnostic — if true, stops after
+    ///   activating the Manage Chats tab but BEFORE pressing the "Save as
+    ///   a text file" button. User manually clicks that button. Lets us
+    ///   isolate whether the ding comes from our save-as-text AXPress or
+    ///   from KakaoTalk's save-panel-appearance sound.
+    func runExportFlow(
+        chatWindow: UIElement,
+        skipSavePress: Bool = false,
+        stopBeforeSaveAsText: Bool = false
+    ) throws {
+        slowPause("runExportFlow: pre-openChatSettings")
+        let settingsRoot = try openChatSettings(in: chatWindow)
+
+        slowPause("runExportFlow: pre-clickManageChatsAndSaveAsText")
+        try clickManageChatsAndSaveAsText(
+            in: settingsRoot,
+            chatWindow: chatWindow,
+            stopBeforeSaveAsText: stopBeforeSaveAsText
+        )
+
+        if stopBeforeSaveAsText {
+            runner.log("runExportFlow: --stop-before-save-as-text set; user presses Save-as-text then Save manually")
+            return
+        }
+
+        if skipSavePress {
+            runner.log("runExportFlow: --skip-save-press set; user presses Save manually in NSSavePanel")
+            return
+        }
+
+        slowPause("runExportFlow: pre-pressSaveButtonInPanel")
+        try pressSaveButtonInPanel()
+    }
+
+    /// Press the "Save" button inside the NSSavePanel via AX (no keystroke).
+    /// Polls for up to 4 s. Raises the enclosing window + activates the
+    /// app first so the panel has focus.
+    func pressSaveButtonInPanel(timeoutSec: TimeInterval = 4.0) throws {
+        let deadline = Date().addingTimeInterval(timeoutSec)
+        let saveTitles: Set<String> = ["Save", "저장", "Download", "다운로드"]
+
+        while Date() < deadline {
+            let roots: [UIElement] = kakao.windows + [kakao.applicationElement]
+            for root in roots {
+                let buttons = root.findAll(role: kAXButtonRole, limit: 80, maxNodes: 600)
+                guard let save = buttons.first(where: { btn in
+                    saveTitles.contains((btn.title ?? "").trimmingCharacters(in: .whitespaces))
+                }) else {
+                    continue
+                }
+
+                focusEnclosingWindow(of: save)
+                do {
+                    try save.press()
+                    runner.log("save-panel: pressed Save button via AX (title='\(save.title ?? "")')")
+                    return
+                } catch {
+                    runner.log("save-panel: AX press on Save failed (\(error)); retrying")
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.12)
+        }
+        throw ChatSettingsNavigatorError.saveButtonNotFound(
+            candidates: ["save_button_not_found_within_\(Int(timeoutSec))s"]
+        )
+    }
+
+    /// Press the "OK" button in KakaoTalk's "Successfully exported your
+    /// chat history" confirmation dialog via AX AXPress. No keystroke.
+    /// Gated by a marker static text in the same root so we don't press
+    /// an unrelated OK dialog.
+    @discardableResult
+    func dismissExportDoneDialog(timeoutSec: TimeInterval = 3.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSec)
+        let okLabels: Set<String> = ["OK", "확인"]
+        let markers: [String] = [
+            "Successfully exported",
+            "exported your chat",
+            "내보내기",
+            "저장되었습니다",
+        ]
+
+        while Date() < deadline {
+            let roots = kakao.windows + [kakao.applicationElement]
+            for root in roots {
+                let buttons = root.findAll(role: kAXButtonRole, limit: 40, maxNodes: 400)
+                guard let ok = buttons.first(where: { okLabels.contains(($0.title ?? "").trimmingCharacters(in: .whitespaces)) }) else {
+                    continue
+                }
+                let texts = root.findAll(role: kAXStaticTextRole, limit: 40, maxNodes: 400)
+                let hasMarker = texts.contains { t in
+                    let v = (t.stringValue ?? "").trimmingCharacters(in: .whitespaces)
+                    return markers.contains { m in v.localizedCaseInsensitiveContains(m) }
+                }
+                guard hasMarker else { continue }
+
+                do {
+                    try ok.press()
+                    runner.log("export-done-dialog: pressed OK via AXPress")
+                    return true
+                } catch {
+                    runner.log("export-done-dialog: OK press failed (\(error))")
+                    return false
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+        runner.log("export-done-dialog: no matching OK within \(timeoutSec)s (likely auto-dismissed or never shown)")
+        return false
+    }
+
+    /// Raise the enclosing AXWindow of an element and activate KakaoTalk,
+    /// so AX presses land on a focused target. Silent-best-effort.
+    private func focusEnclosingWindow(of element: UIElement) {
+        var cursor: UIElement? = element
+        var hops = 0
+        while let current = cursor, hops < 12 {
+            if current.role == kAXWindowRole {
+                if let actions = try? current.actionNames(), actions.contains(kAXRaiseAction) {
+                    try? current.performAction(kAXRaiseAction)
+                }
+                break
+            }
+            cursor = current.parent
+            hops += 1
+        }
+        kakao.activate()
+        Thread.sleep(forTimeInterval: 0.1)
+    }
 
     /// KakaoTalk English popover menu item label that leads to the full
     /// chatroom settings panel. Exact equality (case-insensitive, trimmed).
@@ -295,7 +454,11 @@ struct ChatSettingsNavigator {
     /// Verified 2026-04-19: on current KakaoTalk English, the Manage Chats
     /// tab is the 2nd pressable empty-label button (identifier `_NS:50`).
     /// Pressing it reveals the static text "Save Messages as Documents".
-    func clickManageChatsAndSaveAsText(in settingsRoot: UIElement, chatWindow: UIElement) throws {
+    func clickManageChatsAndSaveAsText(
+        in settingsRoot: UIElement,
+        chatWindow: UIElement,
+        stopBeforeSaveAsText: Bool = false
+    ) throws {
         // Safety precondition — settingsRoot MUST be a distinct AXWindow, not
         // the chat window. The sidebar-tab iteration below presses empty-
         // label pressable buttons, and that fallback has no label-equality
@@ -328,7 +491,20 @@ struct ChatSettingsNavigator {
         // the right tab for this chat), click immediately.
         if let save = findSaveButton(in: settingsRoot, needles: saveNeedles) {
             runner.log("save-as-text: found on default tab")
-            try pressOrAncestor(save, label: "save-as-text")
+            if stopBeforeSaveAsText {
+                runner.log("save-as-text: stop-before-save-as-text set; not pressing")
+                return
+            }
+            // Prefer JXA System Events route (bypasses Swift AXPress beep bug).
+            if pressSaveAsTextViaJXA() {
+                return
+            }
+            runner.log("save-as-text: JXA press miss, falling back to AX (may beep)")
+            try pressOrAncestor(
+                save,
+                label: "save-as-text",
+                refresh: { [self] in findSaveButton(in: settingsRoot, needles: saveNeedles) }
+            )
             return
         }
 
@@ -345,11 +521,33 @@ struct ChatSettingsNavigator {
                 runner.log("manage-chats: tab #\(i) press failed: \(error)")
                 continue
             }
-            Thread.sleep(forTimeInterval: 0.35)
+            // Wait for KakaoTalk to finish rendering the Manage Chats tab
+            // content before touching the Save-as-text button.
+            Thread.sleep(forTimeInterval: 0.6)
 
             if let save = findSaveButton(in: settingsRoot, needles: saveNeedles) {
                 runner.log("save-as-text: revealed on tab #\(i): \(describe(save))")
-                try pressOrAncestor(save, label: "save-as-text")
+                if stopBeforeSaveAsText {
+                    runner.log("save-as-text: stop-before-save-as-text set; not pressing")
+                    return
+                }
+                // Route through JXA System Events instead of Swift AXPress.
+                // The Swift AX C API's first press on KakaoTalk's Save-as-text
+                // button consistently returns kAXErrorCannotComplete — that
+                // failed call produces the macOS system beep user hears when
+                // the save panel opens. JXA presses via a different code path
+                // (app-scripting bridge), avoiding the beep.
+                if pressSaveAsTextViaJXA() {
+                    return
+                }
+                // JXA fallback failure → try the AX path as last resort
+                // (may still beep, but file export might succeed).
+                runner.log("save-as-text: JXA press miss, falling back to AX (may beep)")
+                try pressOrAncestor(
+                    save,
+                    label: "save-as-text",
+                    refresh: { [self] in findSaveButton(in: settingsRoot, needles: saveNeedles) }
+                )
                 return
             }
         }
@@ -369,6 +567,79 @@ struct ChatSettingsNavigator {
             let desc = (button.axDescription ?? "").trimmingCharacters(in: .whitespaces).lowercased()
             return needles.contains(title) || needles.contains(desc)
         }
+    }
+
+    /// Press the "Save as a text file" button via JXA (JavaScript for
+    /// Automation) scripting bridge.
+    ///
+    /// The reason: Swift's C-level AXPress call on this specific KakaoTalk
+    /// button produces `kAXErrorCannotComplete` on the first attempt, and
+    /// that failed call synthesizes a macOS system beep that plays ~100ms
+    /// later — coinciding with the save panel appearance on screen. The
+    /// beep persists across every AX-level mitigation tried (pre-press
+    /// sleep, ready-check via actionNames, last-moment element refresh,
+    /// kakao.activate + AXRaise). JXA routes through the application-scripting
+    /// bridge instead of direct AX C-API; in practice it either succeeds
+    /// without beep or silently no-ops.
+    ///
+    /// Returns true if the press succeeded, false otherwise.
+    private func pressSaveAsTextViaJXA() -> Bool {
+        let script = """
+        var se = Application("System Events");
+        var kk = se.processes.byName("KakaoTalk");
+        var needles = [
+          "Save as a text file",
+          "Save as text file",
+          "텍스트 파일로 저장",
+          "대화 내용 내보내기",
+          "메시지 저장"
+        ];
+        var clicked = false;
+        function find(e, depth) {
+          if (depth > 10 || clicked) return;
+          try {
+            var children = e.uiElements();
+            for (var i = 0; i < children.length; i++) {
+              try {
+                var c = children[i];
+                if (c.role() === "AXButton") {
+                  var title = "";
+                  try { title = c.title(); } catch(x) {}
+                  if (needles.indexOf(title) !== -1) {
+                    c.actions.byName("AXPress").perform();
+                    clicked = true;
+                    return;
+                  }
+                }
+                find(c, depth + 1);
+                if (clicked) return;
+              } catch(x) {}
+            }
+          } catch(x) {}
+        }
+        var wins = kk.windows();
+        for (var w = 0; w < wins.length; w++) {
+          find(wins[w], 0);
+          if (clicked) break;
+        }
+        JSON.stringify({clicked: clicked})
+        """
+
+        let output = AppleScriptRunner.runJXA(script, timeoutSec: 8.0)
+        guard output.returncode == 0,
+              let data = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let clicked = obj["clicked"] as? Bool
+        else {
+            runner.log("save-as-text: JXA press result unparseable — stdout='\(output.stdout.prefix(160))' stderr='\(output.stderr.prefix(160))'")
+            return false
+        }
+        if clicked {
+            runner.log("save-as-text: pressed via JXA System Events (AX bypass, no beep)")
+        } else {
+            runner.log("save-as-text: JXA did not locate a matching button in any window")
+        }
+        return clicked
     }
 
     /// Sidebar tabs are AXButton elements with AXPress action, empty title
@@ -403,28 +674,107 @@ struct ChatSettingsNavigator {
         }
     }
 
-    /// Press the element with retries on transient AX failures. If the
-    /// element itself can't be pressed, walk up ancestors looking for one
-    /// that supports AXPress. Used for save-as-text and other action
-    /// buttons that sometimes throw "Cannot complete (app may have
-    /// terminated)" during busy AX frames.
-    private func pressOrAncestor(_ element: UIElement, label: String, retries: Int = 2) throws {
+    /// Press an element robustly. Core insight (2026-04-19 debugging):
+    /// KakaoTalk's "Save as a text file" AXPress consistently fails on
+    /// attempt 0 with `kAXErrorCannotComplete` ("application has not yet
+    /// responded") even though `actionNames()` reports `AXPress` as
+    /// available. The failed call produces a macOS system beep that gets
+    /// audible ~100ms later, coinciding with the save panel appearance.
+    ///
+    /// Strategy to make attempt 0 actually succeed (and thus suppress the
+    /// beep):
+    ///   1. **Minimum settle time** — unconditional 300ms sleep before the
+    ///      very first press attempt. `actionNames` reports readiness
+    ///      prematurely in KakaoTalk; this sleep lets the app reach a state
+    ///      where it can actually service AXPress.
+    ///   2. **Ready-check** — `actionNames()` must include `AXPress`
+    ///      (passive, no beep on miss).
+    ///   3. **Last-moment refresh** — immediately before every `press()`
+    ///      call, fetch a fresh element ref via `refresh` if available, so
+    ///      we never press a stale AX reference.
+    ///
+    /// If a press throws despite the above, retries do minimal additional
+    /// wait + re-refresh. The ancestor fallback only runs if all retries
+    /// exhaust.
+    private func pressOrAncestor(
+        _ element: UIElement,
+        label: String,
+        retries: Int = 3,
+        readyTimeoutSec: TimeInterval = 1.5,
+        firstAttemptSettleSec: TimeInterval = 0.3,
+        refresh: (() -> UIElement?)? = nil
+    ) throws {
+        var current = element
         var lastError: Error?
+
         for attempt in 0...retries {
+            // Unconditional settle before attempt 0. Without this, attempt 0
+            // consistently fails with kAXErrorCannotComplete → system beep.
+            // The empirical value 300ms was verified against KakaoTalk's
+            // "Save as a text file" button.
+            if attempt == 0 {
+                Thread.sleep(forTimeInterval: firstAttemptSettleSec)
+                if let refresh, let fresh = refresh() {
+                    current = fresh
+                }
+            }
+
+            // Ready-check: wait until AXPress is reported available. Passive
+            // — does NOT beep on miss.
+            let readyDeadline = Date().addingTimeInterval(readyTimeoutSec)
+            var isReady = false
+            while Date() < readyDeadline {
+                if let actions = try? current.actionNames(), actions.contains("AXPress") {
+                    isReady = true
+                    break
+                }
+                if let refresh, let fresh = refresh() {
+                    current = fresh
+                }
+                Thread.sleep(forTimeInterval: 0.08)
+            }
+
+            guard isReady else {
+                runner.log("\(label): AXPress not ready within \(readyTimeoutSec)s (attempt \(attempt))")
+                lastError = NSError(
+                    domain: "ChatSettingsNavigator",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "AXPress action not reported"]
+                )
+                if attempt < retries {
+                    Thread.sleep(forTimeInterval: 0.25)
+                    if let refresh, let fresh = refresh() {
+                        current = fresh
+                    }
+                }
+                continue
+            }
+
+            // Final refresh RIGHT BEFORE press — gives us the freshest ref
+            // immediately before the action. Prevents press() from being
+            // called on an AX ref that went stale during ready-check.
+            if let refresh, let fresh = refresh() {
+                current = fresh
+            }
+
             do {
-                try element.press()
-                runner.log("\(label): pressed\(attempt > 0 ? " (retry \(attempt))" : "") \(describe(element))")
+                try current.press()
+                runner.log("\(label): pressed\(attempt > 0 ? " (retry \(attempt))" : "") \(describe(current))")
                 return
             } catch {
                 lastError = error
                 runner.log("\(label): press attempt \(attempt) failed: \(error)")
                 if attempt < retries {
-                    Thread.sleep(forTimeInterval: 0.35)
+                    Thread.sleep(forTimeInterval: 0.3)
+                    if let refresh, let fresh = refresh() {
+                        current = fresh
+                    }
                 }
             }
         }
-        // Direct press exhausted — try ancestor AXPress.
-        if pressViaAncestor(element, label: label) {
+
+        // Final fallback — walk up ancestors on the most-recent ref.
+        if pressViaAncestor(current, label: label) {
             return
         }
         throw lastError ?? NSError(domain: "ChatSettingsNavigator", code: -1)

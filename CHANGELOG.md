@@ -109,6 +109,39 @@ Code-review 라운드 (2026-04-19) 에서 발견한 4건 모두 수정:
 
 **검증** (방금 실행): 전체 AX flow 통과 후 `[export-done-dialog: no OK button detected within 3.0s]` 로그 — 파일 착지 직후 다이얼로그는 이미 사라진 상태였음. **Ding 소리 0회 발생** 기대 (사용자 확인 필요).
 
+### Fixed — root-cause beep on "Save as a text file" AXPress (2026-04-19)
+
+위 수정 이후에도 ding 이 1회 남아 있었음. 사용자 피드백: "save as 창이 열리고 나서, save 버튼을 누르기 전에 발생한다". 단계별 격리 테스트 (`--stop-before-save-as-text`, `--skip-save-press`) 로 원인 확정.
+
+**Root cause**: Swift 의 AX C API (`AXUIElementPerformAction(element, kAXPressAction)`) 로 KakaoTalk 의 "Save as a text file" 버튼을 누르면 **attempt 0 이 consistently `kAXErrorCannotComplete` ("application has not yet responded") 를 반환**. 이 실패한 AXPress 호출이 macOS 시스템 beep 을 synthesize → 오디오 재생이 ~100ms 지연되어 사용자 체감상 **save 패널 등장 순간** 에 들림. 실패 후 retry (attempt 1) 는 성공하지만 beep 은 이미 큐잉된 후.
+
+Attempt 0 실패를 제거하려는 여러 시도는 모두 효과 없음:
+- 0.3 ~ 2.0s pre-press sleep
+- `actionNames()` 기반 ready-check (AXPress 액션 available 인지 확인)
+- Press 직전 AX ref refresh
+- `kakao.activate()` + `AXRaise` on enclosing window
+
+→ 이 버튼의 AXPress 첫 호출은 KakaoTalk 의 일관된 특성으로 시간 대기로 해결 불가.
+
+**Fix**: Swift 의 AX C API 경로 대신 **JXA (JavaScript for Automation) `System Events.processes.byName("KakaoTalk").actions.byName("AXPress").perform()`** 사용. JXA 는 app-scripting 브리지를 통해 내려가며 direct AX C-API 와 다른 코드 경로. 실험 결과 **JXA 경로는 첫 호출에서 바로 성공**, attempt 0 실패 없음, beep 없음.
+
+**구현** — `ChatSettingsNavigator.pressSaveAsTextViaJXA()` (신규):
+- JXA 스크립트로 `kakao.windows()` 하위 재귀 탐색, `title === "Save as a text file"` (또는 locale 변형) AXButton 발견 시 `AXPress` action 실행.
+- 성공 시 `clicked: true` 반환; SyncHistoryCommand 는 이걸 먼저 시도하고 실패 시만 Swift AXPress 로 fallback (현재는 fallback 발동 케이스 없음).
+- `clickManageChatsAndSaveAsText` 의 direct-path + indirect-path 양쪽 모두 JXA 우선.
+
+**진단 플래그 (debug 전용)**:
+- `--no-dismiss-dialog` — export-done 다이얼로그의 OK 버튼 press 건너뛰기
+- `--skip-save-press` — NSSavePanel 의 Save 버튼 press 건너뛰기 (사용자가 수동)
+- `--stop-before-save-as-text` — "Save as a text file" press 이전에 정지
+- `--debug-slow` — 각 AX step 사이 2초 idle (타이밍 이슈 격리용)
+
+이 4개 플래그 덕에 위 근본 원인을 **4회의 단계적 격리 실행** 으로 특정 가능.
+
+**검증**: `ktok sync-history "광역 협의체 실무지원"` 정상 flow (no debug flags) — 전체 AX 통과, CSV 저장, DB dedupe 정상. 사용자 확인: **ding 0회** (첫 소음 없는 실행).
+
+**남은 미세 이슈**: `hamburger` 버튼의 AXPress 도 attempt 0 에서 `Cannot complete` 로 실패하고 retry 로 성공 — 이론상 beep 1회 발생 가능하지만 사용자는 이 시점에서 beep 을 보고하지 않음 (KakaoTalk 앱 activation 사운드에 mask 되거나 knowledge 가 충분한 시점에 잡히지 않는 듯). 필요 시 hamburger 에도 동일한 JXA 우회 적용 가능 — 지금은 `Not-a-bug` 로 유보.
+
 ### Removed
 - 상류 fork 이전 이름 `kmsg` 의 모든 런타임·문서·CI 잔재 제거.
   - **Swift**: `Sources/ktok/Commands/MCPServerCommand.swift` 내부 타입/메서드 리네임.
