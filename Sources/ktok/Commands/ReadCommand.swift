@@ -7,12 +7,14 @@ struct ReadCommand: ParsableCommand {
         let fetchedAt: String
         let count: Int
         let messages: [TranscriptMessage]
+        let attachments: [TranscriptAttachment]
 
         enum CodingKeys: String, CodingKey {
             case chat
             case fetchedAt = "fetched_at"
             case count
             case messages
+            case attachments
         }
     }
 
@@ -48,6 +50,9 @@ struct ReadCommand: ParsableCommand {
 
     @Flag(name: .long, help: "Output in JSON format")
     var json: Bool = false
+
+    @Flag(name: .customLong("record-events"), inversion: .prefixedNo, help: "Record observed messages and attachments to the shared ktok workspace")
+    var recordEvents: Bool = true
 
     func run() throws {
         guard AccessibilityPermission.ensureGranted() else {
@@ -125,6 +130,10 @@ struct ReadCommand: ParsableCommand {
             return
         }
 
+        if recordEvents {
+            KtokWorkspaceStore.recordReadSnapshot(snapshot)
+        }
+
         if json {
             try printMessagesAsJSON(snapshot)
             return
@@ -143,6 +152,24 @@ struct ReadCommand: ParsableCommand {
             print("    body: \(message.body)")
             print("")
         }
+
+        if !snapshot.attachments.isEmpty {
+            print("Attachments detected (\(snapshot.attachments.count)):\n")
+            for attachment in snapshot.attachments {
+                print("- \(attachment.attachmentID) \(attachment.candidateValue)")
+                if let author = attachment.author {
+                    print("    author: \(author)")
+                }
+                if let timeRaw = attachment.timeRaw {
+                    print("    time: \(timeRaw)")
+                }
+                if let filename = attachment.filename {
+                    print("    filename: \(filename)")
+                }
+                print("    row_index: \(attachment.rowIndex)")
+                print("")
+            }
+        }
     }
 
     private func printMessagesAsJSON(_ snapshot: TranscriptSnapshot) throws {
@@ -153,7 +180,8 @@ struct ReadCommand: ParsableCommand {
             chat: snapshot.chat,
             fetchedAt: formatter.string(from: snapshot.fetchedAt),
             count: snapshot.count,
-            messages: snapshot.messages
+            messages: snapshot.messages,
+            attachments: snapshot.attachments
         )
 
         let encoder = JSONEncoder()

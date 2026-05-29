@@ -216,6 +216,22 @@ struct AXActionRunner {
         pressKey(code: 13, flags: .maskCommand) // W
     }
 
+    func pressCommandNumber(_ number: Int) {
+        let keyCodes: [Int: CGKeyCode] = [
+            1: 18,
+            2: 19,
+            3: 20,
+            4: 21,
+            5: 23,
+            6: 22,
+            7: 26,
+            8: 28,
+            9: 25,
+        ]
+        guard let keyCode = keyCodes[number] else { return }
+        pressKey(code: keyCode, flags: .maskCommand)
+    }
+
     func pressPaste() {
         pressKey(code: 9, flags: .maskCommand) // V
     }

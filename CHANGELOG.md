@@ -6,6 +6,126 @@
 
 ## [Unreleased]
 
+### Added — Shared `~/.ktok` workspace, account login, live events, attachments, and MCP refresh (2026-05-29)
+
+**공유 로컬 workspace 확정**:
+
+- `KTOK_HOME` override 및 기본 `~/.ktok` storage root 도입.
+- 계정별 저장 구조 정리:
+  - `accounts/<alias>/account.json`
+  - `accounts/<alias>/rooms.json`
+  - `accounts/<alias>/history.sqlite`
+  - `accounts/<alias>/events/<yyyy-mm-dd>.jsonl`
+  - `accounts/<alias>/inputs/text/...`
+  - `accounts/<alias>/inputs/files/...`
+  - `accounts/<alias>/rooms/<chat_id>/events/...`
+  - `accounts/<alias>/rooms/<chat_id>/attachments/<attachment_id>/metadata.json`
+- `KtokPaths` 및 `KtokWorkspaceStore` 추가. workspace 생성, legacy copy-first migration, account-scoped DB/export/download 경로, atomic write, JSONL append lock, event/input 저장을 중앙화.
+- 기존 legacy 위치:
+  - `~/Library/Application Support/ktok/account-state.json`
+  - `~/Library/Application Support/ktok/ktok.db`
+  - `~/.ktok/chat-registry.json`
+  - `~/.ktok/ax-cache.json`
+  를 새 workspace 위치로 copy-first migration. 기존 파일은 삭제하지 않음.
+- `.gitignore` 기본 정책을 local-only workspace 기준으로 정리.
+
+**로그인 / 계정 상태**:
+
+- `ktok login <alias>`, `ktok logout`, `ktok whoami`, `ktok assume <alias>` 추가.
+- `.env` 기반 multi-account credential loading:
+  - `KTOK_LOGIN_<ALIAS>_ID`
+  - `KTOK_LOGIN_<ALIAS>_PASSWORD`
+  - `KTOK_LOGIN_<ALIAS>_PROFILE_NAME`
+  - `KTOK_LOGIN_<ALIAS>_KEEP_LOGGED_IN`
+- macOS Keychain 저장소 추가. service=`ktok`, account=`login:<alias>`.
+- 현재 계정 상태는 `~/.ktok/state/current-account.json`, 계정 metadata는 `~/.ktok/accounts/<alias>/account.json`에 기록. password는 파일에 저장하지 않음.
+- 친구 목록 전환(`Cmd+1`) 후 첫 번째 프로필 row를 읽는 `AccountProfileDetector` 추가. `whoami`와 `chats`가 가능한 경우 profile name으로 현재 alias를 검증/갱신.
+
+**채팅방 목록 / account scope**:
+
+- `rooms.json`을 계정별로 이동하고 `chat_id` 산출에 account scope 반영.
+- `ktok chats` 기본 동작을 full scroll scan으로 변경. `--limit <n>`이 있을 때만 제한 스캔.
+- AX scroll helper 추가:
+  - `ScrollEvents.scrollElement`
+  - `ScrollEvents.setVerticalScrollPosition`
+- 기존 v1 `rooms.json` / legacy `chat-registry.json`을 v2로 승격하는 migration 추가. 기존 stable `chat_id`를 버리지 않음.
+
+**새 storage/input/event CLI**:
+
+- `ktok storage paths --json [--account <alias>] [--chat-id <id>|--chat <title>]`
+- `ktok storage validate --json`
+- `ktok events append --account <alias> [--chat-id <id>|--chat <title>] --type <type> --json-file <path|-> --json`
+- `ktok inputs save-text --account <alias> [--chat-id <id>|--chat <title>] --source <name> --text <text> --json`
+- `ktok inputs save-file --account <alias> [--chat-id <id>|--chat <title>] --source <name> <file> --json`
+- 모든 workspace write는 parent directory 생성, temp file + same-directory atomic rename, JSONL append lock을 사용.
+- `inputs save-file`은 streaming SHA-256으로 파일 해시 계산. 큰 파일도 전체를 메모리에 올리지 않음.
+
+**live read/watch attachment + event recording**:
+
+- `ktok read --json`의 기존 `messages` shape 유지 후 top-level `attachments` 배열 추가.
+- `ktok watch --json`에 `attachment` event 추가.
+- `AttachmentScanner`가 visible range의 모든 후보를 newest-first로 반환할 수 있도록 확장.
+- `TranscriptReader`가 첨부 row를 단순 system row로 버리지 않고 `TranscriptAttachment`로 분리 반환.
+- deterministic `attachment_id` 추가: `sha256(chat|time_raw|author|candidate_value|row_index)` prefix.
+- `read` / `watch` 기본값으로 observed message/attachment event를 `~/.ktok` JSONL에 기록. `--no-record-events`로 비활성화 가능.
+- 첨부 sighting metadata는 기존 `downloaded` 상태를 `seen`으로 되돌리지 않도록 status rank 기반 merge 적용.
+
+**download-file 개선**:
+
+- `ktok download-file <chat> --attachment-id <id>` 추가.
+- `--attachment-id`가 있으면 visible/scroll scan 후보의 deterministic id와 매칭.
+- JSON output에 `attachment_id`, `candidate_value`, `downloaded_file`, `save_dir`, `watched_dirs`, `status`, workspace event paths 추가.
+- `--attachment-id` + `--save-dir` 미지정 시 room-scoped attachments directory를 기본 저장 위치로 사용. 그 외에는 account downloads directory 사용.
+- 다운로드 metadata를 `rooms/<chat_id>/attachments/<attachment_id>/metadata.json`에 기록.
+
+**MCP 현행화**:
+
+- `initialize.instructions`를 ktok의 KakaoTalk I/O + shared workspace 역할에 맞게 갱신.
+- `ktok_read` 응답에 `attachments` 노출.
+- `ktok_download_file` input schema에 `attachment_id` 추가.
+- 신규 MCP tools:
+  - `ktok_storage_paths`
+  - `ktok_inputs_save_text`
+  - `ktok_inputs_save_file`
+  - `ktok_events_append`
+- `ktok_events_append`는 `payload` 누락 또는 non-object payload를 `INVALID_ARGUMENT`로 거부. 빈 이벤트를 쓰지 않음.
+
+**문서 정리**:
+
+- `README.md` 전면 갱신: ktok 역할, shared workspace, quick start, storage boundary, MCP tools 요약.
+- `docs/CLI.md` 추가: 모든 CLI 명령, 옵션, JSON output, 실패 코드, 예시 정리.
+- `docs/DEV_GUIDE.md` 추가: 외부 서비스가 `~/.ktok`을 읽고 쓰는 규칙, schema, atomic/lock 규칙, dedupe, SDK 도입 기준.
+- `docs/SERVICE_INTEGRATION.md`는 Dev Guide로 안내하는 compatibility 문서로 축소.
+
+**Fixes from review**:
+
+- v1 `rooms.json` decoding 실패 시 registry를 empty로 reset하던 문제 수정. 기존 room identity 보존.
+- `ktok chats` full scan이 첫 화면 AX rows만 보고 끝나던 문제 수정.
+- attachment sighting이 기존 downloaded metadata를 seen 상태로 덮어쓰던 문제 수정.
+- JSON/metadata write가 destination 삭제 후 move 하던 비원자적 교체를 same-directory `rename` 기반 atomic replace로 수정.
+- JSONL append에서 short write / EINTR 처리 추가.
+- metadata path는 실제 write 성공 시에만 event `paths`에 기록.
+- `download-file --save-dir` 도움말과 MCP schema 설명을 실제 default 동작과 일치시킴.
+
+**검증**:
+
+- `swift build`
+- `swift build -c release`
+- `git diff --check`
+- isolated `KTOK_HOME` smoke:
+  - `ktok storage paths --json`
+  - `ktok storage validate --json`
+  - `ktok inputs save-text --account work --source test --text hello --json`
+  - `ktok inputs save-file --account work --source test <file> --json`
+  - `ktok events append --account work --type message --json-file - --json`
+- MCP smoke:
+  - `initialize`
+  - invalid `ktok_events_append` without payload returns `INVALID_ARGUMENT`
+
+**검증하지 않은 영역**:
+
+- live KakaoTalk `read/watch/download-file` E2E는 실제 앱 상태, 채팅방 내용 기록, 파일 다운로드 부작용이 있어 이번 커밋 전 검증에서는 실행하지 않음. 테스트용 방과 임시 `--save-dir`, 필요 시 `--no-record-events`를 지정한 별도 live smoke가 필요.
+
 ### Added — Chat history DB + sync flow (big feature, 2026-04-18 ~ 2026-04-19)
 
 **데이터 레이어 신설** — 모든 대화를 로컬 SQLite 에 영구 저장하여 검색 가능.

@@ -14,6 +14,7 @@ struct DownloadFileCommand: ParsableCommand {
 
             Examples:
               ktok download-file "친구" --filename report.pdf
+              ktok download-file "팀방" --attachment-id att_abc123 --save-dir /tmp/attachments
               ktok download-file "팀방" --save-dir /tmp/attachments --max-scroll 12
               ktok download-file "친구" --filename report.pdf --json
             """
@@ -25,8 +26,11 @@ struct DownloadFileCommand: ParsableCommand {
     @Option(name: .customLong("filename"), help: "Target filename (substring match). Omit to grab the newest attachment.")
     var filename: String?
 
-    @Option(name: .customLong("save-dir"), help: "Directory to save the file into. Default: ~/Downloads.")
-    var saveDir: String = "~/Downloads"
+    @Option(name: .customLong("attachment-id"), help: "Attachment id from ktok read --json / ktok watch --json.")
+    var attachmentID: String?
+
+    @Option(name: .customLong("save-dir"), help: "Directory to save the file into. Defaults to room-scoped attachments path with --attachment-id, otherwise ~/.ktok/accounts/<alias>/downloads.")
+    var saveDir: String?
 
     @Option(name: .customLong("max-scroll"), help: "Max number of scroll-up attempts when searching (0-30, default 8).")
     var maxScroll: Int = 8
@@ -71,15 +75,19 @@ struct DownloadFileCommand: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let expandedSaveDir = URL(fileURLWithPath: (saveDir as NSString).expandingTildeInPath).standardizedFileURL.path
-        let defaultDownloads = URL(fileURLWithPath: ("~/Downloads" as NSString).expandingTildeInPath).standardizedFileURL.path
+        let activeAlias: String
+        let defaultAccountDownloads: String
         do {
-            try FileManager.default.createDirectory(atPath: expandedSaveDir, withIntermediateDirectories: true)
+            guard let alias = KtokPaths.activeAccountAlias() else {
+                throw KtokStorageError.accountUnknown
+            }
+            activeAlias = alias
+            defaultAccountDownloads = try KtokPaths.activeDownloadsPath()
         } catch {
             emitError(
-                code: "INVALID_ARGUMENT",
-                message: "Cannot create save_dir: \(error)",
-                hint: "Check directory path and permissions.",
+                code: "ACCOUNT_UNKNOWN",
+                message: String(describing: error),
+                hint: "Run 'ktok login <alias>' or 'ktok assume <alias>' first.",
                 latencyMs: Int(Date().timeIntervalSince(start) * 1000)
             )
             throw ExitCode.failure
@@ -151,14 +159,24 @@ struct DownloadFileCommand: ParsableCommand {
         var lastAXError: String?
         var candidatesSeen = 0
         var targetCandidate: AttachmentScanner.Candidate?
+        let requestedAttachmentID = attachmentID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasRequestedAttachmentID = requestedAttachmentID?.isEmpty == false
 
         for attempt in 0...clampedMaxScroll {
-            let scan = AttachmentScanner.scan(chat: windowTitle, filename: filename)
+            let scan = hasRequestedAttachmentID
+                ? AttachmentScanner.scanAll(chat: windowTitle)
+                : AttachmentScanner.scan(chat: windowTitle, filename: filename)
             if let err = scan.axError {
                 lastAXError = err
             }
             candidatesSeen = max(candidatesSeen, scan.candidates.count)
-            if let chosen = scan.candidates.first {
+            let chosen: AttachmentScanner.Candidate?
+            if let requestedAttachmentID, !requestedAttachmentID.isEmpty {
+                chosen = scan.candidates.first { $0.attachmentID(chat: windowTitle) == requestedAttachmentID }
+            } else {
+                chosen = scan.candidates.first
+            }
+            if let chosen {
                 targetCandidate = chosen
                 break
             }
@@ -174,7 +192,9 @@ struct DownloadFileCommand: ParsableCommand {
 
         guard let target = targetCandidate else {
             let hint: String
-            if let filename, !filename.isEmpty {
+            if let requestedAttachmentID, !requestedAttachmentID.isEmpty {
+                hint = "Attachment '\(requestedAttachmentID)' not found after \(scrollAttempts) scroll(s). Re-run ktok read --json to refresh visible attachment ids, or increase --max-scroll."
+            } else if let filename, !filename.isEmpty {
                 hint = "File '\(filename)' not found after \(scrollAttempts) scroll(s). The file may be further up in chat history or already expired."
             } else {
                 hint = "No file attachments detected in the visible chat area."
@@ -185,6 +205,31 @@ struct DownloadFileCommand: ParsableCommand {
                 candidatesSeen: candidatesSeen,
                 axError: lastAXError,
                 hint: hint,
+                requestedAttachmentID: requestedAttachmentID,
+                latencyMs: Int(Date().timeIntervalSince(start) * 1000)
+            )
+            throw ExitCode.failure
+        }
+
+        let trimmedSaveDir = saveDir?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicitSaveDir = trimmedSaveDir?.isEmpty == false ? trimmedSaveDir : nil
+        let selectedSaveDir = explicitSaveDir
+            ?? (hasRequestedAttachmentID
+                ? KtokWorkspaceStore.attachmentDirectory(
+                    accountAlias: activeAlias,
+                    chatTitle: windowTitle,
+                    attachmentID: target.attachmentID(chat: windowTitle)
+                ).path
+                : defaultAccountDownloads)
+        let expandedSaveDir = URL(fileURLWithPath: (selectedSaveDir as NSString).expandingTildeInPath).standardizedFileURL.path
+        let defaultDownloads = URL(fileURLWithPath: ("~/Downloads" as NSString).expandingTildeInPath).standardizedFileURL.path
+        do {
+            try FileManager.default.createDirectory(atPath: expandedSaveDir, withIntermediateDirectories: true)
+        } catch {
+            emitError(
+                code: "INVALID_ARGUMENT",
+                message: "Cannot create save_dir: \(error)",
+                hint: "Check directory path and permissions.",
                 latencyMs: Int(Date().timeIntervalSince(start) * 1000)
             )
             throw ExitCode.failure
@@ -278,16 +323,32 @@ struct DownloadFileCommand: ParsableCommand {
         }
 
         let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
+        let targetObject = targetJSON(target)
+        let status = downloadedFile == nil ? "download_not_observed" : "downloaded"
+        let workspaceEvent = KtokWorkspaceStore.recordDownload(
+            chatTitle: windowTitle,
+            attachmentID: target.attachmentID(chat: windowTitle),
+            candidateValue: target.value,
+            target: targetObject,
+            downloadedFile: downloadedFile,
+            saveDir: expandedSaveDir,
+            watchedDirs: watchedDirs,
+            status: status
+        )
         emitSuccess(
             chat: windowTitle,
             downloadedFile: downloadedFile,
             target: target,
+            targetObject: targetObject,
             scrollAttempts: scrollAttempts,
             savePanelShown: panelShown,
             savePanelOverridden: savePanelOverridden,
             saveDebug: saveDebug,
             watchedDirs: watchedDirs,
             filename: filename,
+            requestedAttachmentID: requestedAttachmentID,
+            saveDir: expandedSaveDir,
+            workspaceEvent: workspaceEvent,
             latencyMs: latencyMs
         )
 
@@ -302,27 +363,29 @@ struct DownloadFileCommand: ParsableCommand {
         chat: String,
         downloadedFile: String?,
         target: AttachmentScanner.Candidate,
+        targetObject: [String: Any],
         scrollAttempts: Int,
         savePanelShown: Bool,
         savePanelOverridden: Bool,
         saveDebug: String,
         watchedDirs: [String],
         filename: String?,
+        requestedAttachmentID: String?,
+        saveDir: String,
+        workspaceEvent: WorkspaceWriteResult?,
         latencyMs: Int
     ) {
         if json {
+            let status = downloadedFile == nil ? "download_not_observed" : "downloaded"
             var result: [String: Any] = [
                 "ok": downloadedFile != nil,
                 "chat": chat,
-                "downloaded_file": downloadedFile as Any,
-                "target": [
-                    "role": "AXStaticText",
-                    "title": "",
-                    "value": target.value,
-                    "desc": "text",
-                    "reason": target.reason.rawValue,
-                    "row_index": target.rowIndex,
-                ],
+                "attachment_id": target.attachmentID(chat: chat),
+                "candidate_value": target.value,
+                "downloaded_file": downloadedFile.map { $0 as Any } ?? NSNull(),
+                "save_dir": saveDir,
+                "status": status,
+                "target": targetObject,
                 "scroll_attempts": scrollAttempts,
                 "save_panel_shown": savePanelShown,
                 "save_panel_overridden": savePanelOverridden,
@@ -332,6 +395,13 @@ struct DownloadFileCommand: ParsableCommand {
             ]
             if let filename, !filename.isEmpty {
                 result["target_filename"] = filename
+            }
+            if let requestedAttachmentID, !requestedAttachmentID.isEmpty {
+                result["requested_attachment_id"] = requestedAttachmentID
+            }
+            if let workspaceEvent {
+                result["workspace_event_path"] = workspaceEvent.eventPath.map { $0 as Any } ?? NSNull()
+                result["workspace_event_paths"] = workspaceEvent.eventPaths
             }
             if downloadedFile == nil {
                 result["error"] = [
@@ -344,6 +414,7 @@ struct DownloadFileCommand: ParsableCommand {
         } else {
             if let downloadedFile {
                 print("✓ Downloaded: \(downloadedFile)")
+                print("  attachment_id: \(target.attachmentID(chat: chat))")
             } else {
                 let effectiveTimeout = max(1.0, min(300.0, stableTimeoutSec))
                 print("⚠️  Save was pressed but no new stable file appeared within \(Int(effectiveTimeout))s.")
@@ -352,28 +423,46 @@ struct DownloadFileCommand: ParsableCommand {
         }
     }
 
+    private func targetJSON(_ target: AttachmentScanner.Candidate) -> [String: Any] {
+        [
+            "role": "AXStaticText",
+            "title": "",
+            "value": target.value,
+            "desc": "text",
+            "reason": target.reason.rawValue,
+            "row_index": target.rowIndex,
+            "filename": target.filename.map { $0 as Any } ?? NSNull(),
+            "author": target.author.map { $0 as Any } ?? NSNull(),
+            "time_raw": target.timeRaw.map { $0 as Any } ?? NSNull(),
+        ]
+    }
+
     private func emitNoFileFound(
         chat: String,
         scrollAttempts: Int,
         candidatesSeen: Int,
         axError: String?,
         hint: String,
+        requestedAttachmentID: String?,
         latencyMs: Int
     ) {
         if json {
-            let result: [String: Any] = [
+            var result: [String: Any] = [
                 "ok": false,
                 "error": [
                     "code": "NO_FILE_FOUND",
                     "message": "Could not locate a file attachment in the chat",
                     "hint": hint,
-                    "ax_error": axError as Any,
+                    "ax_error": axError.map { $0 as Any } ?? NSNull(),
                 ],
                 "chat": chat,
                 "scroll_attempts": scrollAttempts,
                 "candidates_seen": candidatesSeen,
                 "meta": ["latency_ms": latencyMs],
             ]
+            if let requestedAttachmentID, !requestedAttachmentID.isEmpty {
+                result["requested_attachment_id"] = requestedAttachmentID
+            }
             printJSON(result)
         } else {
             print("[NO_FILE_FOUND] \(hint)")

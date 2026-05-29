@@ -110,10 +110,9 @@ final class Database {
         Int(sqlite3_changes(handle))
     }
 
-    /// Standard location: `~/Library/Application Support/ktok/ktok.db`
+    /// Standard location: `~/.ktok/accounts/<alias>/history.sqlite`
     static func defaultPath() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/ktok/ktok.db"
+        (try? KtokPaths.activeDatabasePath()) ?? KtokPaths.defaultDB(alias: "unknown")
     }
 }
 

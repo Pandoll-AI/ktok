@@ -4,7 +4,21 @@ import Foundation
 struct ChatsCommand: ParsableCommand {
     private struct ChatsJSONResponse: Codable {
         let count: Int
+        let account: ChatAccountSummary
+        let updateTrigger: String
         let chats: [ChatListEntry]
+
+        enum CodingKeys: String, CodingKey {
+            case count
+            case account
+            case updateTrigger = "update_trigger"
+            case chats
+        }
+    }
+
+    private struct ChatAccountSummary: Codable {
+        let key: String
+        let alias: String?
     }
 
     static let configuration = CommandConfiguration(
@@ -15,8 +29,8 @@ struct ChatsCommand: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Show detailed information")
     var verbose: Bool = false
 
-    @Option(name: .shortAndLong, help: "Maximum number of chats to show")
-    var limit: Int = 20
+    @Option(name: .shortAndLong, help: "Maximum number of chats to show. Omit for a full scroll scan.")
+    var limit: Int?
 
     @Flag(name: .long, help: "Show AX traversal and retry details")
     var traceAX: Bool = false
@@ -71,14 +85,34 @@ struct ChatsCommand: ParsableCommand {
         }
 
         runner.log("chats: usable window ready")
+        if
+            let environment = try? LoginEnvironment.load(),
+            let detected = AccountProfileDetector(kakao: kakao, runner: runner)
+                .detectCurrentProfile(environment: environment, timeoutSec: 1.0, restoreChatsTab: true),
+            let credentials = detected.credentials
+        {
+            try? LoginAccountState.save(credentials: credentials)
+            runner.log("chats: verified active account via profile '\(detected.profileName)' as alias '\(credentials.alias)'")
+        } else {
+            runner.pressCommandNumber(2)
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+
         let scanner = ChatListScanner()
-        let snapshots = scanner.scan(in: mainWindow, limit: limit, trace: { message in
-            runner.log(message)
-        })
+        let snapshots: [ChatListSnapshotItem]
+        if let limit {
+            snapshots = scanner.scan(in: mainWindow, limit: limit, trace: { message in
+                runner.log(message)
+            })
+        } else {
+            snapshots = scanner.scanAll(in: mainWindow, trace: { message in
+                runner.log(message)
+            })
+        }
 
         if snapshots.isEmpty {
             if json {
-                try printChatsAsJSON([])
+                try printChatsAsJSON([], account: ChatAccountContext.active())
                 return
             }
             print("No chat list found.")
@@ -89,7 +123,12 @@ struct ChatsCommand: ParsableCommand {
         }
 
         let registry = ChatIdentityRegistryStore.shared
-        let assignedIDs = registry.assignChatIDs(for: snapshots.map(\.discovery))
+        let account = ChatAccountContext.active()
+        let assignedIDs = registry.assignChatIDs(
+            for: snapshots.map(\.discovery),
+            account: account,
+            trigger: .manualChatsCommand
+        )
         let chats = zip(snapshots, assignedIDs).map { snapshot, chatID in
             ChatListEntry(
                 title: snapshot.discovery.title,
@@ -98,11 +137,16 @@ struct ChatsCommand: ParsableCommand {
             )
         }
         if json {
-            try printChatsAsJSON(chats)
+            try printChatsAsJSON(chats, account: account)
             return
         }
 
         print("Searching for chat list in KakaoTalk...\n")
+        if let alias = account.alias {
+            print("Account: \(alias) (\(account.accountKey))\n")
+        } else {
+            print("Account: unknown (\(account.accountKey))\n")
+        }
         print("Found \(chats.count) chat(s):\n")
 
         for (index, chat) in chats.enumerated() {
@@ -114,8 +158,13 @@ struct ChatsCommand: ParsableCommand {
         }
     }
 
-    private func printChatsAsJSON(_ chats: [ChatListEntry]) throws {
-        let response = ChatsJSONResponse(count: chats.count, chats: chats)
+    private func printChatsAsJSON(_ chats: [ChatListEntry], account: ChatAccountContext) throws {
+        let response = ChatsJSONResponse(
+            count: chats.count,
+            account: ChatAccountSummary(key: account.accountKey, alias: account.alias),
+            updateTrigger: ChatListUpdateTrigger.manualChatsCommand.rawValue,
+            chats: chats
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(response)

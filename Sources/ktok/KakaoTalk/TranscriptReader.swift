@@ -22,10 +22,35 @@ struct TranscriptMessage: Encodable, Equatable, Sendable {
     }
 }
 
+struct TranscriptAttachment: Encodable, Equatable, Sendable {
+    let attachmentID: String
+    let chat: String
+    let chatID: String?
+    let filename: String?
+    let candidateValue: String
+    let author: String?
+    let timeRaw: String?
+    let rowIndex: Int
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case attachmentID = "attachment_id"
+        case chat
+        case chatID = "chat_id"
+        case filename
+        case candidateValue = "candidate_value"
+        case author
+        case timeRaw = "time_raw"
+        case rowIndex = "row_index"
+        case reason
+    }
+}
+
 struct TranscriptSnapshot: Sendable {
     let chat: String
     let fetchedAt: Date
     let messages: [TranscriptMessage]
+    let attachments: [TranscriptAttachment]
 
     var count: Int {
         messages.count
@@ -108,14 +133,18 @@ struct KakaoTalkTranscriptReader {
             referenceDate: referenceDate,
             frameCache: frameCache
         )
-        guard !displayMessages.isEmpty else {
+        let chatTitle = chatWindow.title ?? fallbackChatTitle
+        let attachments = extractAttachments(chatTitle: chatTitle)
+
+        guard !displayMessages.isEmpty || !attachments.isEmpty else {
             throw TranscriptReadError.noReadableMessages
         }
 
         return TranscriptSnapshot(
-            chat: chatWindow.title ?? fallbackChatTitle,
+            chat: chatTitle,
             fetchedAt: referenceDate,
-            messages: displayMessages
+            messages: displayMessages,
+            attachments: attachments
         )
     }
 
@@ -303,6 +332,30 @@ struct KakaoTalkTranscriptReader {
         }
 
         return Array(deduplicateMessagesPreservingOrder(messages).suffix(limit))
+    }
+
+    private func extractAttachments(chatTitle: String) -> [TranscriptAttachment] {
+        let scan = AttachmentScanner.scanAll(chat: chatTitle)
+        if let axError = scan.axError {
+            runner.log("read: attachment scan failed \(axError)")
+            return []
+        }
+
+        let attachments = scan.candidates.map { candidate in
+            TranscriptAttachment(
+                attachmentID: candidate.attachmentID(chat: chatTitle),
+                chat: chatTitle,
+                chatID: nil,
+                filename: candidate.filename,
+                candidateValue: candidate.value,
+                author: candidate.author,
+                timeRaw: candidate.timeRaw,
+                rowIndex: candidate.rowIndex,
+                reason: candidate.reason.rawValue
+            )
+        }
+        runner.log("read: attachment candidates=\(attachments.count)")
+        return attachments
     }
 
     private func directRowChildren(from element: UIElement) -> [UIElement] {

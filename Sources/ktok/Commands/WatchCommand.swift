@@ -23,13 +23,15 @@ struct WatchCommand: ParsableCommand {
         let chat: String
         let event: String
         let detectedAt: String
-        let message: TranscriptMessage
+        let message: TranscriptMessage?
+        let attachment: TranscriptAttachment?
 
         enum CodingKeys: String, CodingKey {
             case chat
             case event
             case detectedAt = "detected_at"
             case message
+            case attachment
         }
     }
 
@@ -64,6 +66,9 @@ struct WatchCommand: ParsableCommand {
 
     @Flag(name: .long, help: "Include system messages such as date separators")
     var includeSystem: Bool = false
+
+    @Flag(name: .customLong("record-events"), inversion: .prefixedNo, help: "Record emitted events to the shared ktok workspace")
+    var recordEvents: Bool = true
 
     func run() throws {
         guard AccessibilityPermission.ensureGranted() else {
@@ -137,6 +142,7 @@ struct WatchCommand: ParsableCommand {
         let startupMessages = filterMessagesAfterWatchStart(baseline.messages, watchStartedAt: watchStartedAt)
         var state = WatchPollingState(includeSystemMessages: includeSystem)
         state.replaceBaseline(with: startupMessages)
+        var seenAttachmentIDs = Set(baseline.attachments.map(\.attachmentID))
 
         if !json {
             writeStdout("Watching chat: \(currentChatTitle)\n")
@@ -145,6 +151,7 @@ struct WatchCommand: ParsableCommand {
 
         for message in startupMessages {
             try emit(message: message, chat: currentChatTitle, detectedAt: baseline.fetchedAt)
+            record(message: message, chat: currentChatTitle, detectedAt: baseline.fetchedAt)
         }
 
         installWatchSignalHandlers()
@@ -178,6 +185,12 @@ struct WatchCommand: ParsableCommand {
             let emitted = state.consume(snapshotMessages: eligibleMessages)
             for message in emitted {
                 try emit(message: message, chat: currentChatTitle, detectedAt: snapshot.fetchedAt)
+                record(message: message, chat: currentChatTitle, detectedAt: snapshot.fetchedAt)
+            }
+            let newAttachments = snapshot.attachments.filter { seenAttachmentIDs.insert($0.attachmentID).inserted }
+            for attachment in newAttachments {
+                try emit(attachment: attachment, detectedAt: snapshot.fetchedAt)
+                record(attachment: attachment, detectedAt: snapshot.fetchedAt)
             }
         }
     }
@@ -366,7 +379,8 @@ struct WatchCommand: ParsableCommand {
             chat: chat,
             event: message.isSystem ? "system" : "message",
             detectedAt: formatter.string(from: detectedAt),
-            message: message
+            message: message,
+            attachment: nil
         )
 
         let encoder = JSONEncoder()
@@ -374,6 +388,80 @@ struct WatchCommand: ParsableCommand {
         let data = try encoder.encode(payload)
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data([0x0A, 0x0A]))
+    }
+
+    private func emit(attachment: TranscriptAttachment, detectedAt: Date) throws {
+        if json {
+            try emitJSON(attachment: attachment, detectedAt: detectedAt)
+            return
+        }
+
+        writeStdout("attachment: \(attachment.attachmentID)\n")
+        writeStdout("value: \(attachment.candidateValue)\n")
+        if let author = attachment.author {
+            writeStdout("author: \(author)\n")
+        }
+        if let timeRaw = attachment.timeRaw {
+            writeStdout("time: \(timeRaw)\n")
+        }
+        if let filename = attachment.filename {
+            writeStdout("filename: \(filename)\n")
+        }
+        writeStdout("\n")
+    }
+
+    private func emitJSON(attachment: TranscriptAttachment, detectedAt: Date) throws {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let payload = WatchJSONEvent(
+            chat: attachment.chat,
+            event: "attachment",
+            detectedAt: formatter.string(from: detectedAt),
+            message: nil,
+            attachment: attachment
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(payload)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data([0x0A, 0x0A]))
+    }
+
+    private func record(message: TranscriptMessage, chat: String, detectedAt: Date) {
+        guard recordEvents else { return }
+        let scope = KtokWorkspaceStore.resolveScope(
+            accountAlias: KtokPaths.activeAccountAlias() ?? "unknown",
+            chatID: nil,
+            chatTitle: chat
+        )
+        let eventID = "evt_\(KtokWorkspaceStore.hashPrefix("message|\(scope.accountAlias)|\(scope.chatID ?? "")|\(message.author ?? "")|\(message.timeRaw ?? "")|\(message.body)", bytes: 8))"
+        _ = try? KtokWorkspaceStore.appendEvent(
+            accountAlias: scope.accountAlias,
+            accountKey: scope.accountKey,
+            chatID: scope.chatID,
+            chatTitle: scope.chatTitle,
+            eventType: message.isSystem ? "system" : "message",
+            source: "ktok_watch",
+            payload: [
+                "author": message.author ?? "(me)",
+                "time_raw": message.timeRaw.map { $0 as Any } ?? NSNull(),
+                "body": message.body,
+                "is_system": message.isSystem,
+            ],
+            eventID: eventID,
+            timestamp: KtokWorkspaceStore.isoString(detectedAt)
+        )
+    }
+
+    private func record(attachment: TranscriptAttachment, detectedAt: Date) {
+        guard recordEvents else { return }
+        KtokWorkspaceStore.recordAttachmentSighting(
+            attachment,
+            source: "ktok_watch",
+            observedAt: KtokWorkspaceStore.isoString(detectedAt)
+        )
     }
 
     private func printWatchStartupFailure(_ error: Error) throws {

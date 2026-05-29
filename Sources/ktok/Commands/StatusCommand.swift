@@ -11,6 +11,7 @@ struct StatusCommand: ParsableCommand {
     var verbose: Bool = false
 
     func run() throws {
+        KtokPaths.migrateLegacyStorageIfNeeded()
         print("ktok - KakaoTalk CLI Tool\n")
 
         // Check accessibility permission
@@ -56,6 +57,28 @@ struct StatusCommand: ParsableCommand {
             }
         }
 
+        print("")
+        print("Storage:")
+        print("  root: \(KtokPaths.home.path)")
+        print("  current_account: \(KtokPaths.currentAccountState.path)")
+        print("  ax_cache: \(KtokPaths.axCache.path)")
+        if let alias = KtokPaths.activeAccountAlias() {
+            print("  active_alias: \(alias)")
+            print("  account_dir: \(KtokPaths.accountDir(alias: alias).path)")
+            print("  rooms: \(KtokPaths.rooms(alias: alias).path)")
+            print("  db: \(KtokPaths.defaultDB(alias: alias))")
+            print("  downloads: \(KtokPaths.defaultDownloads(alias: alias))")
+            print("  exports: \(KtokPaths.defaultExports(alias: alias))")
+        } else {
+            print("  active_alias: unknown")
+        }
+        if FileManager.default.fileExists(atPath: KtokPaths.legacyAccountState.path)
+            || FileManager.default.fileExists(atPath: KtokPaths.legacyDatabase.path)
+            || FileManager.default.fileExists(atPath: KtokPaths.legacyChatRegistry.path)
+            || FileManager.default.fileExists(atPath: KtokPaths.legacyAXCache.path) {
+            print("  legacy: present, copied forward when matching new files were absent")
+        }
+
         print("\n✓ Ready to use ktok commands\n")
         printUsage()
     }
@@ -70,6 +93,12 @@ struct StatusCommand: ParsableCommand {
           read      Read messages from a chat room
           send      Send a message to a chat room
           send-image Send an image to a chat
+          login     Log in using an alias from .env
+          logout    Log out of KakaoTalk
+          whoami    Show the current ktok login alias
+          storage   Inspect shared ~/.ktok workspace paths
+          events    Append shared workspace events
+          inputs    Save user text/files into shared workspace
           cache     Manage AX path cache
           inspect   Inspect KakaoTalk UI hierarchy (debug)
           mcp-server Run the stdio MCP server for integrations
@@ -85,6 +114,10 @@ struct StatusCommand: ParsableCommand {
           ktok read "친구이름"             Read messages from chat
           ktok send "친구이름" "안녕!"      Send a message
           ktok send-image "친구이름" "/tmp/a.png" Send an image
+          ktok login work                 Log in using KTOK_LOGIN_WORK_* from .env
+          ktok whoami                     Show current login alias
+          ktok storage paths --json       Show shared workspace paths
+          ktok inputs save-text --account work --source cli --text "hello" --json
           ktok send --chat-id "<id>" "안녕!" Send a message by chat_id
           ktok mcp-server                 Run local MCP server
         """)

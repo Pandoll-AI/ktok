@@ -22,15 +22,15 @@ struct SyncHistoryCommand: ParsableCommand {
             Examples:
               ktok sync-history "채팅방"
               ktok sync-history "Emergency Lee" --my-kakao-id "Emergency Lee" --json
-              ktok sync-history "팀방" --save-dir /tmp/ktok/dumps --trace-ax
+              ktok sync-history "팀방" --save-dir ~/.ktok/accounts/work/exports --trace-ax
             """
     )
 
     @Argument(help: "Name of the chat to export")
     var chatName: String
 
-    @Option(name: .customLong("save-dir"), help: "Directory for the CSV dump (default: /tmp/ktok/dumps)")
-    var saveDir: String = "/tmp/ktok/dumps"
+    @Option(name: .customLong("save-dir"), help: "Directory for the CSV dump (default: ~/.ktok/accounts/<alias>/exports)")
+    var saveDir: String?
 
     @Option(name: .customLong("my-kakao-id"), help: "Your own KakaoTalk display name — tags attachment direction")
     var myKakaoId: String?
@@ -91,7 +91,16 @@ struct SyncHistoryCommand: ParsableCommand {
         }
 
         // --- Setup: save dir, AX runner, KakaoTalk, chat resolver ---
-        let expandedSaveDir = URL(fileURLWithPath: (saveDir as NSString).expandingTildeInPath).standardizedFileURL.path
+        let defaultSaveDir: String
+        do {
+            defaultSaveDir = try KtokPaths.activeExportsPath()
+        } catch {
+            emitError(code: "ACCOUNT_UNKNOWN", message: String(describing: error), start: start)
+            throw ExitCode.failure
+        }
+        let trimmedSaveDir = saveDir?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedSaveDir = (trimmedSaveDir?.isEmpty == false ? trimmedSaveDir : nil) ?? defaultSaveDir
+        let expandedSaveDir = URL(fileURLWithPath: (selectedSaveDir as NSString).expandingTildeInPath).standardizedFileURL.path
         let downloadsDir = URL(fileURLWithPath: ("~/Downloads" as NSString).expandingTildeInPath).standardizedFileURL.path
         try? FileManager.default.createDirectory(atPath: expandedSaveDir, withIntermediateDirectories: true)
 
@@ -169,8 +178,10 @@ struct SyncHistoryCommand: ParsableCommand {
             : DirectoryWatcher.relocateIfNeeded(dumpPath, preferredDir: expandedSaveDir)
 
         let db: Database
+        let dbPath: String
         do {
-            db = try Database(path: Database.defaultPath())
+            dbPath = try KtokPaths.activeDatabasePath()
+            db = try Database(path: dbPath)
             try Migrations.run(on: db)
         } catch {
             emitError(code: "DB_INIT_FAILED", message: String(describing: error), start: start)
@@ -187,7 +198,7 @@ struct SyncHistoryCommand: ParsableCommand {
         }
 
         let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
-        emitSuccess(result: result, latencyMs: latencyMs)
+        emitSuccess(result: result, latencyMs: latencyMs, dbPath: dbPath)
     }
 
     private func axErrorCode(for err: ChatSettingsNavigatorError) -> String {
@@ -202,7 +213,7 @@ struct SyncHistoryCommand: ParsableCommand {
 
     // MARK: - Output
 
-    private func emitSuccess(result: HistoryImporter.Result, latencyMs: Int) {
+    private func emitSuccess(result: HistoryImporter.Result, latencyMs: Int, dbPath: String) {
         if json {
             let payload: [String: Any] = [
                 "ok": true,
@@ -215,7 +226,7 @@ struct SyncHistoryCommand: ParsableCommand {
                 "attachments_inserted": result.attachmentsInserted,
                 "rejected_rows": result.parsedDump.rejectedRows.count,
                 "sync_run_id": result.syncRunId,
-                "db_path": Database.defaultPath(),
+                "db_path": dbPath,
                 "meta": ["latency_ms": latencyMs],
             ]
             printJSON(payload)
@@ -224,7 +235,7 @@ struct SyncHistoryCommand: ParsableCommand {
             print("  dump:     \(result.filePath)")
             print("  parsed:   \(result.parsedDump.totalRowsParsed) rows")
             print("  inserted: \(result.messagesInserted) messages (skipped dupes: \(result.messagesSkipped)), \(result.attachmentsInserted) attachments")
-            print("  db:       \(Database.defaultPath())  sync_run_id=\(result.syncRunId)")
+            print("  db:       \(dbPath)  sync_run_id=\(result.syncRunId)")
         }
     }
 

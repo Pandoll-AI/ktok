@@ -98,6 +98,72 @@ struct ChatListScanner {
         return snapshots
     }
 
+    func scanAll(
+        in window: UIElement,
+        maxPasses: Int = 80,
+        trace: ((String) -> Void)? = nil
+    ) -> [ChatListSnapshotItem] {
+        guard let container = resolveChatListContainer(in: window, trace: trace) else {
+            trace?("chats: chat list container unavailable")
+            return []
+        }
+
+        _ = ScrollEvents.setVerticalScrollPosition(container, value: 0.0)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        var discoveries: [ChatListDiscovery] = []
+        var seenKeys = Set<String>()
+        var stablePasses = 0
+        var scrollValue = 0.0
+
+        for pass in 0..<maxPasses {
+            let rows = collectChatItems(from: container, limit: 120)
+            let visible = rows.map { row -> ChatListDiscovery in
+                let title = extractTitle(from: row, trace: trace)
+                let preview = extractPreview(from: row, title: title, trace: trace)
+                return ChatListDiscovery(title: title, lastMessage: preview, listIndex: discoveries.count)
+            }
+
+            var newCount = 0
+            for discovery in visible {
+                let key = fullScanKey(discovery)
+                guard !seenKeys.contains(key) else { continue }
+                seenKeys.insert(key)
+                discoveries.append(ChatListDiscovery(
+                    title: discovery.title,
+                    lastMessage: discovery.lastMessage,
+                    listIndex: discoveries.count
+                ))
+                newCount += 1
+            }
+
+            trace?("chats: full scan pass=\(pass + 1), visible=\(visible.count), new=\(newCount), total=\(discoveries.count)")
+            if newCount == 0 {
+                stablePasses += 1
+            } else {
+                stablePasses = 0
+            }
+            if stablePasses >= 3 {
+                break
+            }
+
+            scrollValue = min(1.0, scrollValue + 0.08)
+            let didSetScroll = ScrollEvents.setVerticalScrollPosition(container, value: scrollValue)
+            if !didSetScroll {
+                guard ScrollEvents.scrollElement(container, direction: .down, amount: 10) else {
+                    break
+                }
+            }
+            if scrollValue >= 1.0, newCount == 0 {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.18)
+        }
+
+        trace?("chats: full scan resolved rows=\(discoveries.count)")
+        return discoveries.map { ChatListSnapshotItem(element: window, discovery: $0) }
+    }
+
     func warmup(in window: UIElement, trace: ((String) -> Void)? = nil) -> [AXPathSlot] {
         guard let container = resolveChatListContainer(in: window, trace: trace) else {
             return []
@@ -164,6 +230,23 @@ struct ChatListScanner {
 
         let discoveredRows = container.findAll(role: kAXRowRole, limit: limit, maxNodes: max(80, limit * 8))
         return deduplicateElements(discoveredRows)
+    }
+
+    private func snapshots(from rows: [UIElement], trace: ((String) -> Void)? = nil) -> [ChatListSnapshotItem] {
+        rows.enumerated().map { index, row in
+            let title = extractTitle(from: row, trace: trace)
+            let preview = extractPreview(from: row, title: title, trace: trace)
+            return ChatListSnapshotItem(
+                element: row,
+                discovery: ChatListDiscovery(title: title, lastMessage: preview, listIndex: index)
+            )
+        }
+    }
+
+    private func fullScanKey(_ discovery: ChatListDiscovery) -> String {
+        let title = ChatTextNormalizer.normalize(discovery.title)
+        let preview = discovery.lastMessage.map(ChatTextNormalizer.normalize) ?? ""
+        return preview.isEmpty ? title : "\(title)|\(preview)"
     }
 
     private func extractTitle(from row: UIElement, trace: ((String) -> Void)? = nil) -> String {

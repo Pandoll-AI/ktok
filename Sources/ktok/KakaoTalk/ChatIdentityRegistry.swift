@@ -3,12 +3,73 @@ import Foundation
 
 struct ChatIdentityRecord: Codable {
     var chatID: String
+    var accountKey: String
+    var accountAlias: String?
+    var accountIDHash: String?
     var displayName: String
     var normalizedName: String
     var lastPreviewNormalized: String?
     var firstSeenAt: Date
     var lastSeenAt: Date
     var lastSeenIndex: Int?
+    var lastRefreshTrigger: String?
+
+    enum CodingKeys: String, CodingKey {
+        case chatID
+        case accountKey
+        case accountAlias
+        case accountIDHash
+        case displayName
+        case normalizedName
+        case lastPreviewNormalized
+        case firstSeenAt
+        case lastSeenAt
+        case lastSeenIndex
+        case lastRefreshTrigger
+    }
+
+    init(
+        chatID: String,
+        accountKey: String,
+        accountAlias: String?,
+        accountIDHash: String?,
+        displayName: String,
+        normalizedName: String,
+        lastPreviewNormalized: String?,
+        firstSeenAt: Date,
+        lastSeenAt: Date,
+        lastSeenIndex: Int?,
+        lastRefreshTrigger: String?
+    ) {
+        self.chatID = chatID
+        self.accountKey = accountKey
+        self.accountAlias = accountAlias
+        self.accountIDHash = accountIDHash
+        self.displayName = displayName
+        self.normalizedName = normalizedName
+        self.lastPreviewNormalized = lastPreviewNormalized
+        self.firstSeenAt = firstSeenAt
+        self.lastSeenAt = lastSeenAt
+        self.lastSeenIndex = lastSeenIndex
+        self.lastRefreshTrigger = lastRefreshTrigger
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let activeAccount = ChatAccountContext.active()
+
+        chatID = try container.decode(String.self, forKey: .chatID)
+        accountKey = try container.decodeIfPresent(String.self, forKey: .accountKey) ?? activeAccount.accountKey
+        accountAlias = try container.decodeIfPresent(String.self, forKey: .accountAlias) ?? activeAccount.alias
+        accountIDHash = try container.decodeIfPresent(String.self, forKey: .accountIDHash) ?? activeAccount.accountIDHash
+        displayName = try container.decode(String.self, forKey: .displayName)
+        normalizedName = try container.decode(String.self, forKey: .normalizedName)
+        lastPreviewNormalized = try container.decodeIfPresent(String.self, forKey: .lastPreviewNormalized)
+        firstSeenAt = try container.decode(Date.self, forKey: .firstSeenAt)
+        lastSeenAt = try container.decode(Date.self, forKey: .lastSeenAt)
+        lastSeenIndex = try container.decodeIfPresent(Int.self, forKey: .lastSeenIndex)
+        lastRefreshTrigger = try container.decodeIfPresent(String.self, forKey: .lastRefreshTrigger)
+    }
 }
 
 private struct ChatIdentityRegistryDocument: Codable {
@@ -18,8 +79,10 @@ private struct ChatIdentityRegistryDocument: Codable {
 }
 
 final class ChatIdentityRegistryStore: @unchecked Sendable {
-    static let shared = ChatIdentityRegistryStore()
-    static let schemaVersion = 1
+    static var shared: ChatIdentityRegistryStore {
+        ChatIdentityRegistryStore()
+    }
+    static let schemaVersion = 2
 
     let fileURL: URL
 
@@ -40,16 +103,21 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
         self.decoder = decoder
     }
 
-    func assignChatIDs(for discoveries: [ChatListDiscovery]) -> [String] {
+    func assignChatIDs(
+        for discoveries: [ChatListDiscovery],
+        account: ChatAccountContext = .active(),
+        trigger: ChatListUpdateTrigger = .manualChatsCommand
+    ) -> [String] {
         var document = loadDocument()
         var records = document.records
         let now = Date()
         var assignedIDs = Array(repeating: "", count: discoveries.count)
+        let scopedRecordIndices = records.indices.filter { records[$0].accountKey == account.accountKey }
 
         let groupedCurrent = Dictionary(grouping: discoveries.indices) { index in
             ChatTextNormalizer.normalize(discoveries[index].title)
         }
-        let groupedExisting = Dictionary(grouping: records.indices) { index in
+        let groupedExisting = Dictionary(grouping: scopedRecordIndices) { index in
             records[index].normalizedName
         }
 
@@ -72,7 +140,14 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
                 }
                 let recordIndex = unmatchedRecords.remove(at: matchOffset)
                 unmatchedCurrent.removeAll { $0 == currentIndex }
-                records[recordIndex] = updatedRecord(records[recordIndex], with: discoveries[currentIndex], preview: preview, now: now)
+                records[recordIndex] = updatedRecord(
+                    records[recordIndex],
+                    with: discoveries[currentIndex],
+                    preview: preview,
+                    account: account,
+                    trigger: trigger,
+                    now: now
+                )
                 assignedIDs[currentIndex] = records[recordIndex].chatID
             }
 
@@ -85,7 +160,14 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
                     let currentIndex = unmatchedCurrent[offset]
                     let recordIndex = sortedRemainingRecords[offset]
                     let preview = normalizePreview(discoveries[currentIndex].lastMessage)
-                    records[recordIndex] = updatedRecord(records[recordIndex], with: discoveries[currentIndex], preview: preview, now: now)
+                    records[recordIndex] = updatedRecord(
+                        records[recordIndex],
+                        with: discoveries[currentIndex],
+                        preview: preview,
+                        account: account,
+                        trigger: trigger,
+                        now: now
+                    )
                     assignedIDs[currentIndex] = records[recordIndex].chatID
                 }
                 unmatchedCurrent.removeFirst(zippedCount)
@@ -93,15 +175,19 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
 
             for currentIndex in unmatchedCurrent {
                 let preview = normalizePreview(discoveries[currentIndex].lastMessage)
-                let chatID = nextChatID(for: normalizedName, existingRecords: records)
+                let chatID = nextChatID(for: normalizedName, account: account, existingRecords: records)
                 let record = ChatIdentityRecord(
                     chatID: chatID,
+                    accountKey: account.accountKey,
+                    accountAlias: account.alias,
+                    accountIDHash: account.accountIDHash,
                     displayName: discoveries[currentIndex].title,
                     normalizedName: normalizedName,
                     lastPreviewNormalized: preview,
                     firstSeenAt: now,
                     lastSeenAt: now,
-                    lastSeenIndex: discoveries[currentIndex].listIndex
+                    lastSeenIndex: discoveries[currentIndex].listIndex,
+                    lastRefreshTrigger: trigger.rawValue
                 )
                 records.append(record)
                 assignedIDs[currentIndex] = chatID
@@ -117,27 +203,39 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
 
     func record(for chatID: String) -> ChatIdentityRecord? {
         let document = loadDocument()
-        return document.records.first(where: { $0.chatID == chatID })
+        let activeAccount = ChatAccountContext.active()
+        return document.records.first(where: { $0.chatID == chatID && $0.accountKey == activeAccount.accountKey })
+            ?? document.records.first(where: { $0.chatID == chatID })
     }
 
     private func updatedRecord(
         _ record: ChatIdentityRecord,
         with discovery: ChatListDiscovery,
         preview: String?,
+        account: ChatAccountContext,
+        trigger: ChatListUpdateTrigger,
         now: Date
     ) -> ChatIdentityRecord {
         var updated = record
+        updated.accountKey = account.accountKey
+        updated.accountAlias = account.alias
+        updated.accountIDHash = account.accountIDHash
         updated.displayName = discovery.title
         updated.lastSeenAt = now
         updated.lastSeenIndex = discovery.listIndex
+        updated.lastRefreshTrigger = trigger.rawValue
         if let preview, !preview.isEmpty {
             updated.lastPreviewNormalized = preview
         }
         return updated
     }
 
-    private func nextChatID(for normalizedName: String, existingRecords: [ChatIdentityRecord]) -> String {
-        let base = shortHash(normalizedName)
+    private func nextChatID(
+        for normalizedName: String,
+        account: ChatAccountContext,
+        existingRecords: [ChatIdentityRecord]
+    ) -> String {
+        let base = shortHash("\(account.accountKey)|\(normalizedName)")
         let prefix = "chat_\(base)"
         let existingIDs = Set(existingRecords.map(\.chatID))
 
@@ -178,10 +276,18 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
         do {
             let data = try Data(contentsOf: fileURL)
             let document = try decoder.decode(ChatIdentityRegistryDocument.self, from: data)
-            guard document.schemaVersion == Self.schemaVersion else {
+            guard document.schemaVersion <= Self.schemaVersion else {
                 let reset = emptyDocument()
                 cachedDocument = reset
                 return reset
+            }
+            if document.schemaVersion < Self.schemaVersion {
+                var migrated = document
+                migrated.schemaVersion = Self.schemaVersion
+                migrated.updatedAt = Date()
+                cachedDocument = migrated
+                try? persist(migrated)
+                return migrated
             }
             cachedDocument = document
             return document
@@ -208,9 +314,44 @@ final class ChatIdentityRegistryStore: @unchecked Sendable {
     }
 
     private static func defaultURL() -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home
-            .appendingPathComponent(".ktok", isDirectory: true)
-            .appendingPathComponent("chat-registry.json")
+        KtokPaths.migrateLegacyStorageIfNeeded()
+        let alias = LoginAccountState.readWithoutMigration()?.alias ?? "unknown"
+        return KtokPaths.rooms(alias: alias)
     }
+}
+
+struct ChatAccountContext: Codable {
+    let accountKey: String
+    let alias: String?
+    let accountIDHash: String?
+
+    static func active() -> ChatAccountContext {
+        guard let state = LoginAccountState.read() else {
+            return ChatAccountContext(accountKey: "account_unknown", alias: nil, accountIDHash: nil)
+        }
+
+        let hash = state.accountIDHash ?? state.accountID.map(KtokPaths.shortHash)
+        guard let hash else {
+            return ChatAccountContext(accountKey: "account_unknown", alias: state.alias, accountIDHash: nil)
+        }
+        return ChatAccountContext(
+            accountKey: state.accountKey ?? "account_\(hash)",
+            alias: state.alias,
+            accountIDHash: hash
+        )
+    }
+}
+
+enum ChatListUpdateTrigger: String, Codable {
+    case manualChatsCommand = "manual_chats_command"
+    case successfulLogin = "successful_login"
+    case successfulChatOpen = "successful_chat_open"
+
+    static let policySummary = """
+    Chat list cache update policy:
+    - Account scope is derived from the last successful `ktok login <alias>`.
+    - `ktok chats` is the authoritative refresh trigger because it scans the visible KakaoTalk chat list.
+    - `ktok login <alias>` changes account scope but does not force a full scan; callers should run `ktok chats --limit <n>` after switching accounts when they need fresh membership.
+    - Successful direct chat opens may update individual chat recency later, but they should not replace a full `chats` refresh.
+    """
 }

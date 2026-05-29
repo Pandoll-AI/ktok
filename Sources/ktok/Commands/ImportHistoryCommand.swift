@@ -8,8 +8,7 @@ struct ImportHistoryCommand: ParsableCommand {
         discussion: """
             Parse a previously-downloaded KakaoTalk CSV (the "Save as a text
             file" export) and upsert its messages and attachments into the
-            local SQLite database at
-            ~/Library/Application Support/ktok/ktok.db.
+            current account SQLite database under ~/.ktok/accounts/<alias>/.
 
             If --chat-name is omitted, ktok tries to extract it from the
             filename pattern 'KakaoTalk_Chat_<name>_<timestamp>.csv'. The
@@ -51,8 +50,10 @@ struct ImportHistoryCommand: ParsableCommand {
         let start = Date()
 
         let db: Database
+        let dbPath: String
         do {
-            db = try Database(path: Database.defaultPath())
+            dbPath = try KtokPaths.activeDatabasePath()
+            db = try Database(path: dbPath)
             try Migrations.run(on: db)
         } catch {
             emitError(code: "DB_INIT_FAILED", message: String(describing: error), start: start)
@@ -78,12 +79,12 @@ struct ImportHistoryCommand: ParsableCommand {
         }
 
         let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
-        emitSuccess(result: result, latencyMs: latencyMs)
+        emitSuccess(result: result, latencyMs: latencyMs, dbPath: dbPath)
     }
 
     // MARK: - Output
 
-    private func emitSuccess(result: HistoryImporter.Result, latencyMs: Int) {
+    private func emitSuccess(result: HistoryImporter.Result, latencyMs: Int, dbPath: String) {
         let chatName = result.chatName
         let chatId = result.chatId
         let filePath = result.filePath
@@ -107,7 +108,7 @@ struct ImportHistoryCommand: ParsableCommand {
                     ["line": $0.lineNumber, "reason": $0.reason, "raw": $0.raw] as [String: Any]
                 },
                 "sync_run_id": syncRunId,
-                "db_path": Database.defaultPath(),
+                "db_path": dbPath,
                 "meta": ["latency_ms": latencyMs],
             ]
             printJSON(result)
@@ -123,7 +124,7 @@ struct ImportHistoryCommand: ParsableCommand {
                     print("     line \(sample.lineNumber): \(sample.reason)")
                 }
             }
-            print("  db: \(Database.defaultPath())  sync_run_id=\(syncRunId)")
+            print("  db: \(dbPath)  sync_run_id=\(syncRunId)")
         }
     }
 

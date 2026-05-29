@@ -53,7 +53,7 @@ struct HistoryCommand: ParsableCommand {
 
         let db: Database
         do {
-            db = try Database(path: Database.defaultPath())
+            db = try Database(path: KtokPaths.activeDatabasePath())
             try Migrations.run(on: db)
         } catch {
             emitError(code: "DB_INIT_FAILED", message: String(describing: error))

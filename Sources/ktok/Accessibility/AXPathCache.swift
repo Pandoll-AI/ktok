@@ -259,10 +259,7 @@ final class AXPathCacheStore: @unchecked Sendable {
     }
 
     private static func defaultURL() -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home
-            .appendingPathComponent(".ktok", isDirectory: true)
-            .appendingPathComponent("ax-cache.json")
+        KtokPaths.axCache
     }
 
     private static func currentAppFingerprint() -> String {

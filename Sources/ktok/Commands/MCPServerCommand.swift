@@ -199,7 +199,7 @@ private final class KtokMCPServer {
                         "name": "ktok-mcp",
                         "version": serverVersion,
                     ],
-                    "instructions": "Use ktok_read for recent messages, ktok_send/ktok_send_image/ktok_send_file for sending (confirm=true triggers a pre-send confirmation step), ktok_download_file to pull an attachment. For persistent full-history search, use ktok_sync_history (AX-driven CSV export + DB upsert), ktok_import_history (import an existing CSV without AX), and ktok_query_history (filter by chat/kind/author/time range/body).",
+                    "instructions": "ktok is a KakaoTalk macOS I/O tool and shared ~/.ktok workspace owner. Use ktok_read for visible messages and attachment candidates, ktok_send/ktok_send_image/ktok_send_file for sending (confirm=true returns CONFIRMATION_REQUIRED), ktok_download_file to save attachments, and ktok_storage_paths/ktok_inputs_save_text/ktok_inputs_save_file/ktok_events_append for shared workspace writes. For explicit full-history backfill/search, use ktok_sync_history, ktok_import_history, and ktok_query_history.",
                     "meta": [
                         "startup_check": startupCheck,
                     ],
@@ -246,7 +246,7 @@ private final class KtokMCPServer {
         [
             [
                 "name": "ktok_read",
-                "description": "Read recent KakaoTalk messages from a chat via ktok.",
+                "description": "Read recent visible KakaoTalk messages and attachment candidates from a chat via ktok.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -379,8 +379,7 @@ private final class KtokMCPServer {
                         ],
                         "save_dir": [
                             "type": "string",
-                            "default": "/tmp/ktok/dumps",
-                            "description": "Directory for the CSV dump",
+                            "description": "Directory for the CSV dump. Defaults to ~/.ktok/accounts/<alias>/exports when omitted.",
                         ],
                         "stable_timeout_sec": [
                             "type": "number",
@@ -488,19 +487,22 @@ private final class KtokMCPServer {
             ],
             [
                 "name": "ktok_download_file",
-                "description": "Download a file attachment from a KakaoTalk chat. Scrolls up to find the attachment, presses Save, and waits for the file to appear in save_dir.",
+                "description": "Download a file attachment from a KakaoTalk chat. Matches by attachment_id or filename, presses Save, and waits for the file to appear in save_dir.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
                         "chat": ["type": "string", "description": "Chat room or user name"],
+                        "attachment_id": [
+                            "type": "string",
+                            "description": "Attachment id returned by ktok_read / ktok watch --json. Preferred when available.",
+                        ],
                         "filename": [
                             "type": "string",
                             "description": "Target filename (substring match). Omit to grab the newest attachment.",
                         ],
                         "save_dir": [
                             "type": "string",
-                            "default": "~/Downloads",
-                            "description": "Directory to save the file into.",
+                            "description": "Directory to save the file into. Defaults to a room-scoped attachments path when attachment_id is provided, otherwise ~/.ktok/accounts/<alias>/downloads.",
                         ],
                         "max_scroll": [
                             "type": "integer",
@@ -531,6 +533,68 @@ private final class KtokMCPServer {
                     "additionalProperties": false,
                 ],
             ],
+            [
+                "name": "ktok_storage_paths",
+                "description": "Return shared ~/.ktok workspace paths for an optional account/chat scope.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "account": ["type": "string", "description": "Account alias. Defaults to current ktok account if known."],
+                        "chat_id": ["type": "string", "description": "Optional chat_id scope."],
+                        "chat": ["type": "string", "description": "Optional chat title to resolve through rooms.json."],
+                    ],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "ktok_inputs_save_text",
+                "description": "Save a user text input into the shared ktok workspace and append input_text events.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "account": ["type": "string", "description": "Account alias"],
+                        "source": ["type": "string", "description": "Caller/source name"],
+                        "text": ["type": "string", "description": "Text input to save"],
+                        "chat_id": ["type": "string", "description": "Optional chat_id scope."],
+                        "chat": ["type": "string", "description": "Optional chat title to resolve through rooms.json."],
+                    ],
+                    "required": ["account", "source", "text"],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "ktok_inputs_save_file",
+                "description": "Save a user file input into the shared ktok workspace and append input_file events.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "account": ["type": "string", "description": "Account alias"],
+                        "source": ["type": "string", "description": "Caller/source name"],
+                        "file_path": ["type": "string", "description": "Local file path to copy into ~/.ktok"],
+                        "chat_id": ["type": "string", "description": "Optional chat_id scope."],
+                        "chat": ["type": "string", "description": "Optional chat title to resolve through rooms.json."],
+                    ],
+                    "required": ["account", "source", "file_path"],
+                    "additionalProperties": false,
+                ],
+            ],
+            [
+                "name": "ktok_events_append",
+                "description": "Append an arbitrary JSON event payload into the shared ktok workspace.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "account": ["type": "string", "description": "Account alias"],
+                        "event_type": ["type": "string", "description": "Event type, e.g. message, attachment, input_text, input_file, download."],
+                        "source": ["type": "string", "description": "Caller/source name. Defaults to ktok_events."],
+                        "payload": ["type": "object", "description": "JSON object payload to store"],
+                        "chat_id": ["type": "string", "description": "Optional chat_id scope."],
+                        "chat": ["type": "string", "description": "Optional chat title to resolve through rooms.json."],
+                    ],
+                    "required": ["account", "event_type", "payload"],
+                    "additionalProperties": false,
+                ],
+            ],
         ]
     }
 
@@ -556,6 +620,14 @@ private final class KtokMCPServer {
             resultObject = callKtokImportHistory(arguments)
         case "ktok_query_history":
             resultObject = callKtokQueryHistory(arguments)
+        case "ktok_storage_paths":
+            resultObject = callKtokStoragePaths(arguments)
+        case "ktok_inputs_save_text":
+            resultObject = callKtokInputsSaveText(arguments)
+        case "ktok_inputs_save_file":
+            resultObject = callKtokInputsSaveFile(arguments)
+        case "ktok_events_append":
+            resultObject = callKtokEventsAppend(arguments)
         default:
             throw KtokMCPError(code: -32601, message: "Unknown tool: \(name)")
         }
@@ -675,6 +747,7 @@ private final class KtokMCPServer {
             "fetched_at": payload["fetched_at"] as Any,
             "count": payload["count"] ?? 0,
             "messages": payload["messages"] ?? [],
+            "attachments": payload["attachments"] ?? [],
             "meta": [
                 "latency_ms": first.latencyMs,
             ],
@@ -950,14 +1023,20 @@ private final class KtokMCPServer {
             )
         }
 
-        var saveDir = String(describing: arguments["save_dir"] ?? "~/Downloads").trimmingCharacters(in: .whitespacesAndNewlines)
-        if saveDir.isEmpty { saveDir = "~/Downloads" }
+        let saveDir = (arguments["save_dir"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var filename: String?
         if let raw = arguments["filename"], !(raw is NSNull) {
             let trimmed = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 filename = trimmed
+            }
+        }
+        var attachmentID: String?
+        if let raw = arguments["attachment_id"], !(raw is NSNull) {
+            let trimmed = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                attachmentID = trimmed
             }
         }
 
@@ -978,11 +1057,12 @@ private final class KtokMCPServer {
 
         var command = [
             "download-file", chat,
-            "--save-dir", saveDir,
             "--max-scroll", String(maxScroll),
             "--stable-timeout-sec", String(stableTimeout),
             "--json",
         ]
+        if let saveDir, !saveDir.isEmpty { command.append(contentsOf: ["--save-dir", saveDir]) }
+        if let attachmentID { command.append(contentsOf: ["--attachment-id", attachmentID]) }
         if let filename { command.append(contentsOf: ["--filename", filename]) }
         if keepWindow { command.append("--keep-window") }
         if traceAX { command.append("--trace-ax") }
@@ -1027,6 +1107,138 @@ private final class KtokMCPServer {
         )
     }
 
+    private func callKtokStoragePaths(_ arguments: JSONDict) -> JSONDict {
+        KtokWorkspaceStore.paths(
+            accountAlias: optionalString(arguments["account"]),
+            chatID: optionalString(arguments["chat_id"]),
+            chatTitle: optionalString(arguments["chat"])
+        )
+    }
+
+    private func callKtokInputsSaveText(_ arguments: JSONDict) -> JSONDict {
+        guard let account = optionalString(arguments["account"]),
+              let source = optionalString(arguments["source"]),
+              let text = optionalString(arguments["text"])
+        else {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "account, source, and text are required",
+                hint: "Provide all required fields.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        do {
+            let result = try KtokWorkspaceStore.saveText(
+                accountAlias: account,
+                chatID: optionalString(arguments["chat_id"]),
+                chatTitle: optionalString(arguments["chat"]),
+                source: source,
+                text: text
+            )
+            return result.jsonObject()
+        } catch {
+            return errorPayload(
+                code: "WORKSPACE_WRITE_FAILED",
+                message: String(describing: error),
+                hint: "Check account/chat scope and filesystem permissions.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+    }
+
+    private func callKtokInputsSaveFile(_ arguments: JSONDict) -> JSONDict {
+        guard let account = optionalString(arguments["account"]),
+              let source = optionalString(arguments["source"]),
+              let filePath = optionalString(arguments["file_path"])
+        else {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "account, source, and file_path are required",
+                hint: "Provide all required fields.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        do {
+            let result = try KtokWorkspaceStore.saveFile(
+                accountAlias: account,
+                chatID: optionalString(arguments["chat_id"]),
+                chatTitle: optionalString(arguments["chat"]),
+                source: source,
+                filePath: filePath
+            )
+            return result.jsonObject()
+        } catch {
+            return errorPayload(
+                code: "WORKSPACE_WRITE_FAILED",
+                message: String(describing: error),
+                hint: "Check file path and filesystem permissions.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+    }
+
+    private func callKtokEventsAppend(_ arguments: JSONDict) -> JSONDict {
+        guard let account = optionalString(arguments["account"]),
+              let eventType = optionalString(arguments["event_type"])
+        else {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "account and event_type are required",
+                hint: "Provide all required fields.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+        guard let payload = arguments["payload"] as? JSONDict else {
+            return errorPayload(
+                code: "INVALID_ARGUMENT",
+                message: "payload is required and must be a JSON object",
+                hint: "Provide payload as an object, for example {\"body\":\"hello\"}.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+
+        do {
+            let scope = KtokWorkspaceStore.resolveScope(
+                accountAlias: account,
+                chatID: optionalString(arguments["chat_id"]),
+                chatTitle: optionalString(arguments["chat"])
+            )
+            let result = try KtokWorkspaceStore.appendEvent(
+                accountAlias: scope.accountAlias,
+                accountKey: scope.accountKey,
+                chatID: scope.chatID,
+                chatTitle: scope.chatTitle,
+                eventType: eventType,
+                source: optionalString(arguments["source"]) ?? "ktok_events",
+                payload: payload
+            )
+            return result.jsonObject()
+        } catch {
+            return errorPayload(
+                code: "WORKSPACE_WRITE_FAILED",
+                message: String(describing: error),
+                hint: "Check payload and filesystem permissions.",
+                rawStdout: "",
+                rawStderr: "",
+                latencyMs: 0
+            )
+        }
+    }
+
     private func callKtokSyncHistory(_ arguments: JSONDict) -> JSONDict {
         let chat = String(describing: arguments["chat"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if chat.isEmpty {
@@ -1045,8 +1257,7 @@ private final class KtokMCPServer {
             )
         }
 
-        let saveDir = String(describing: arguments["save_dir"] ?? "/tmp/ktok/dumps")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let saveDir = (arguments["save_dir"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let myKakaoId = (arguments["my_kakao_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let keepWindow = boolValue(arguments["keep_window"], defaultValue: false)
         let traceAX = boolValue(arguments["trace_ax"], defaultValue: traceDefault)
@@ -1057,8 +1268,8 @@ private final class KtokMCPServer {
         }()
 
         var command = ["sync-history", chat, "--json",
-                       "--save-dir", saveDir,
                        "--stable-timeout-sec", String(stableTimeout)]
+        if let saveDir, !saveDir.isEmpty { command.append(contentsOf: ["--save-dir", saveDir]) }
         if let myKakaoId, !myKakaoId.isEmpty {
             command.append(contentsOf: ["--my-kakao-id", myKakaoId])
         }
@@ -1286,6 +1497,12 @@ private final class KtokMCPServer {
             }
         }
         return defaultValue
+    }
+
+    private func optionalString(_ raw: Any?) -> String? {
+        guard let raw, !(raw is NSNull) else { return nil }
+        let value = String(describing: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     private func jsonObject(from string: String) -> JSONDict? {
