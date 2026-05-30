@@ -115,14 +115,15 @@ Write commands create parent directories, use atomic file writes, and append JSO
 ## Login Model
 
 ```bash
+scripts/setup-login-env.sh --alias work
 ktok login work
-ktok login private --skip-if-current
+ktok login private --trust-state
 ktok assume work
 ktok whoami --json
 ktok logout
 ```
 
-`ktok login <alias>` reads credentials from env or `.env`, logs into KakaoTalk, and writes account metadata/state. Passwords are stored in the platform secret backend:
+`scripts/setup-login-env.sh` writes non-secret login settings to `~/.ktok/config/.env`, removes any plaintext password entry for that alias, and stores the password in the platform secret backend. `ktok login <alias>` reads the account ID from env or `.env`, reads the password from env or the secret backend, logs into KakaoTalk, and writes account metadata/state.
 
 - macOS: Keychain service `ktok`, account `login:<alias>`.
 - Windows port recommendation: Windows Credential Manager target `ktok/login/<alias>`.

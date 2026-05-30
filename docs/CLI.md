@@ -7,7 +7,7 @@
 | Name | Meaning |
 | --- | --- |
 | `KTOK_HOME` | Override shared workspace root. Defaults to `~/.ktok`. |
-| `.env` | Optional login credential source. |
+| `.env` | Optional login settings source. Prefer storing passwords in the platform secret backend. |
 
 Commands that support `--json` emit one JSON object. Common failure codes include `ACCOUNT_UNKNOWN`, `INVALID_ARGUMENT`, `CHAT_NOT_FOUND`, `NO_FILE_FOUND`, `FILE_EXPIRED`, `DOWNLOAD_NOT_OBSERVED`, `CONFIRMATION_REQUIRED`, and `PROCESS_TIMEOUT`.
 
@@ -23,15 +23,18 @@ Checks Accessibility, KakaoTalk process status, active account, and storage path
 ## login / logout / assume / whoami
 
 ```bash
+scripts/setup-login-env.sh --alias work
 ktok login work
 ktok login private --env-file /path/to/.env --timeout 45
-ktok login work --skip-if-current
+ktok login work --trust-state
 ktok logout
 ktok assume work
 ktok whoami --json
 ```
 
-`login` writes account state and metadata under `~/.ktok/accounts/<alias>/`. Passwords stay in the platform secret backend.
+`scripts/setup-login-env.sh` writes `KTOK_LOGIN_<ALIAS>_ID`, optional profile name, and keep-logged-in settings to `~/.ktok/config/.env`. It stores the password in the platform secret backend and removes `KTOK_LOGIN_<ALIAS>_PASSWORD` from the env file if present.
+
+`login` writes account state and metadata under `~/.ktok/accounts/<alias>/`. Passwords should stay in the platform secret backend.
 
 ## chats
 

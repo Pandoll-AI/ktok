@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added — Interactive login env setup (2026-05-30)
+
+- `scripts/setup-login-env.sh` 추가. 대화형으로 `KTOK_LOGIN_<ALIAS>_ID`, optional profile name, keep-logged-in 설정을 `~/.ktok/config/.env`에 기록한다.
+- 로그인 비밀번호는 `.env`에 저장하지 않고 macOS Keychain(service=`ktok`, account=`login:<alias>`)에 저장한다.
+- 기존 env 파일에 같은 alias의 `KTOK_LOGIN_<ALIAS>_PASSWORD`가 있으면 제거해 plaintext password 잔존을 방지한다.
+- README와 CLI 문서에 새 설정 스크립트 흐름을 추가하고, 현재 CLI 옵션명인 `--trust-state`로 예시를 정정했다.
+
 ### Added — Shared `~/.ktok` workspace, account login, live events, attachments, and MCP refresh (2026-05-29)
 
 **공유 로컬 workspace 확정**:
