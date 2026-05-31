@@ -8,9 +8,13 @@ struct LoginCommand: ParsableCommand {
         discussion: """
             .env format:
               KTOK_LOGIN_WORK_ID=your-account@example.com
-              KTOK_LOGIN_WORK_PASSWORD=secret
+              KTOK_LOGIN_WORK_PROFILE_NAME=Your KakaoTalk profile name
+              KTOK_LOGIN_WORK_KEEP_LOGGED_IN=true
               KTOK_LOGIN_PRIVATE_ID=01012345678
-              KTOK_LOGIN_PRIVATE_PASSWORD=secret
+
+            Store passwords in macOS Keychain with scripts/setup-login-env.sh
+            or another platform secret backend. Avoid committing password values
+            to env files.
 
             Default .env lookup order:
               $KTOK_LOGIN_ENV_FILE, $KTOK_ENV_FILE, ./.env,

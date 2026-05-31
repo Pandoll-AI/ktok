@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Changed — Remove password-like placeholders (2026-05-31)
+
+- `ktok login --help`의 `.env` 예시에서 password-looking placeholder를 제거했다. 비밀번호는 Keychain 또는 platform secret backend에 저장하도록 안내한다.
+
 ### Added — Interactive login env setup (2026-05-30)
 
 - `scripts/setup-login-env.sh` 추가. 대화형으로 `KTOK_LOGIN_<ALIAS>_ID`, optional profile name, keep-logged-in 설정을 `~/.ktok/config/.env`에 기록한다.
