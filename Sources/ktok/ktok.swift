@@ -43,6 +43,7 @@ struct Ktok: ParsableCommand {
             DownloadFileCommand.self,
             ReadCommand.self,
             WatchCommand.self,
+            ChannelCommand.self,
             StorageCommand.self,
             EventsCommand.self,
             InputsCommand.self,
