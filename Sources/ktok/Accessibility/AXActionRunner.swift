@@ -216,6 +216,52 @@ struct AXActionRunner {
         pressKey(code: 13, flags: .maskCommand) // W
     }
 
+    func pressCommandF() {
+        log("keyboard: pressing Cmd+F")
+        pressKey(code: 3, flags: .maskCommand) // F
+    }
+
+    func pressCommandA() {
+        log("keyboard: pressing Cmd+A")
+        pressKey(code: 0, flags: .maskCommand) // A
+    }
+
+    @discardableResult
+    func clickScreenPoint(_ point: CGPoint, label: String) -> Bool {
+        log("\(label): clicking screen point x=\(Int(point.x)) y=\(Int(point.y))")
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard
+            let move = CGEvent(
+                mouseEventSource: source,
+                mouseType: .mouseMoved,
+                mouseCursorPosition: point,
+                mouseButton: .left
+            ),
+            let down = CGEvent(
+                mouseEventSource: source,
+                mouseType: .leftMouseDown,
+                mouseCursorPosition: point,
+                mouseButton: .left
+            ),
+            let up = CGEvent(
+                mouseEventSource: source,
+                mouseType: .leftMouseUp,
+                mouseCursorPosition: point,
+                mouseButton: .left
+            )
+        else {
+            log("\(label): failed to create mouse click events")
+            return false
+        }
+        move.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.03)
+        down.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.05)
+        up.post(tap: .cghidEventTap)
+        log("\(label): posted mouse move/down/up")
+        return true
+    }
+
     func pressCommandNumber(_ number: Int) {
         let keyCodes: [Int: CGKeyCode] = [
             1: 18,

@@ -263,12 +263,9 @@ public final class KakaoTalkApp: Sendable {
         // and contains navigation buttons with id "chatrooms" / "friends"
         if let w = findWindow(titleContaining: "채팅") { return w }
         if let w = findWindow(title: "카카오톡") { return w }
-        // Fallback: find the window containing the chatrooms navigation button
-        for window in windows {
-            if window.findFirst(identifier: "chatrooms") != nil {
-                return window
-            }
-        }
+        // Avoid broad descendant traversal here: KakaoTalk can expose very large
+        // AX trees and `findFirst(identifier:)` may block for minutes when many
+        // windows are open. Callers can still search within the selected root.
         return mainWindow
     }
 
