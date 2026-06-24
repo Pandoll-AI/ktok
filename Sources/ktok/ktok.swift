@@ -27,6 +27,7 @@ struct Ktok: ParsableCommand {
               ktok inputs save-text --account work --source cli --text "hello" --json
               ktok watch "채팅방"
               ktok watch "채팅방" --json
+              ktok monitor "채팅방" --persona luna
               ktok mcp-server
 
             Tip:
@@ -44,6 +45,7 @@ struct Ktok: ParsableCommand {
             ReadCommand.self,
             WatchCommand.self,
             ChannelCommand.self,
+            MonitorCommand.self,
             StorageCommand.self,
             EventsCommand.self,
             InputsCommand.self,
