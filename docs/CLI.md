@@ -123,6 +123,34 @@ Attachment event:
 {"chat":"채팅방","event":"attachment","detected_at":"2026-05-29T10:00:03.000Z","attachment":{"attachment_id":"att_0123456789abcdef","chat":"채팅방","filename":"report.pdf","candidate_value":"report.pdf","row_index":42,"reason":"extension"}}
 ```
 
+## monitor
+
+```bash
+ktok monitor "AgentKorea 운영진" --persona luna
+ktok monitor "AgentKorea 운영진" --persona luna --json
+ktok monitor "AgentKorea 운영진" --persona luna --dry-run
+```
+
+`monitor` opens one target room, keeps reading only that fixed room, and sends replies through the same chat window. This is intended for low-latency room-specific agent operation.
+
+Options:
+
+| Option | Meaning |
+| --- | --- |
+| `--persona <name>` | Persona to use. Currently supported: `luna`. |
+| `--poll-interval <seconds>` | Optional extra sleep after each monitor poll. Default `0`; read time itself naturally throttles the loop. |
+| `--model <model>` | Codex model for reply generation. |
+| `--reasoning-effort <value>` | Codex reasoning effort config value. |
+| `--reply-timeout <seconds>` | Maximum wait for a generated reply. |
+| `--heartbeat-interval <seconds>` | Emit a monitor heartbeat while the fixed-room loop is alive. Use `0` to disable. |
+| `--snapshot-limit <count>` | Visible message count retained for context. |
+| `--trace-ax` | Print Accessibility trace. |
+| `--deep-recovery` | Use slower recovery when the room window becomes stale. |
+| `--dry-run` | Decide and log replies without sending. |
+| `--json` | Emit monitor events as JSONL. |
+
+The `luna` persona responds to direct calls such as `루나` or `비서야`, general greetings, and warm-empathy cues. Names such as `아나벨` and `허동호` are treated as someone else, not as Luna. Seen messages and reply records are stored in the active account SQLite database under `~/.ktok/accounts/<alias>/history.sqlite`.
+
 ## send / send-image / send-file
 
 ```bash

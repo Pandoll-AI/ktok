@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Added — Fixed-room persona monitor (2026-06-24)
+
+- `ktok monitor "<방이름>" --persona luna` 추가.
+- monitor는 대상 방을 한 번 연 뒤 같은 채팅창을 계속 읽고, 같은 창 입력창으로 직접 응답한다.
+- `luna` persona는 `루나`/`비서야` 같은 직접 호출, 일반 인사, 따뜻한 공감이 필요한 메시지에만 응답한다.
+- `아나벨`, `허동호` 등 다른 사람 이름은 루나 호출로 보지 않는다.
+- seen/reply 상태는 활성 계정의 `~/.ktok/accounts/<alias>/history.sqlite`에 `monitor_seen`, `monitor_replies` 테이블로 기록한다.
+- 기본 생성 설정은 현재 ChatGPT 계정에서 호출 가능한 빠른 경로인 `gpt-5.4-mini`, `model_reasoning_effort=low`를 사용한다.
+- monitor는 기본 60초 heartbeat를 출력해 감시 루프가 살아 있는지 확인할 수 있다.
+- 큰 단체방에서 poll이 막히지 않도록 monitor 기본 snapshot은 최근 20개 메시지만 본다.
+- monitor 기본 poll sleep을 제거했다. `--poll-interval`은 필요한 경우 poll 이후 추가 대기 시간으로만 동작한다.
+
 ### Changed — Remove password-like placeholders (2026-05-31)
 
 - `ktok login --help`의 `.env` 예시에서 password-looking placeholder를 제거했다. 비밀번호는 Keychain 또는 platform secret backend에 저장하도록 안내한다.

@@ -13,6 +13,7 @@ ktok login work
 ktok chats --json
 ktok read "채팅방" --json
 ktok watch "채팅방" --json
+ktok monitor "채팅방" --persona luna
 ktok inputs save-text --account work --source my-service --text "hello" --json
 ktok inputs save-file --account work --source my-service /path/to/file.pdf --json
 ktok storage paths --account work --chat "채팅방" --json
@@ -45,6 +46,15 @@ ktok mcp-server
 ```
 
 By default, `read` and `watch` also record observed message/attachment events into the shared workspace. Use `--no-record-events` to disable recording for a run.
+
+`monitor` opens one room once, keeps watching that fixed room, and replies only when the configured persona should respond:
+
+```bash
+ktok assume work
+ktok monitor "AgentKorea 운영진" --persona luna
+```
+
+The `luna` persona replies to direct calls such as `루나` or `비서야`, general greetings, and warm-empathy cues. It does not treat `아나벨` or `허동호` as Luna. Monitor state is kept in the active account SQLite database under `~/.ktok/accounts/<alias>/history.sqlite`.
 
 ## Shared Workspace
 
