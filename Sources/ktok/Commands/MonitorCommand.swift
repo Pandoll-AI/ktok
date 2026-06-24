@@ -31,7 +31,7 @@ struct MonitorCommand: ParsableCommand {
     var heartbeatInterval: Double = 60
 
     @Option(name: .long, help: "Maximum visible messages to keep in each fixed-room snapshot")
-    var snapshotLimit: Int = 20
+    var snapshotLimit: Int = 8
 
     @Flag(name: .long, help: "Show AX traversal and monitor trace")
     var traceAX: Bool = false
@@ -68,7 +68,7 @@ struct MonitorCommand: ParsableCommand {
         try MonitorStateStore.ensureTables(db: db)
 
         let extraSleep = max(0, min(pollInterval, 30.0))
-        let boundedSnapshotLimit = max(20, min(snapshotLimit, 200))
+        let boundedSnapshotLimit = max(8, min(snapshotLimit, 200))
         let runner = AXActionRunner(traceEnabled: traceAX)
         let kakao = try KakaoTalkApp()
         let resolver = ChatWindowResolver(kakao: kakao, runner: runner, useCache: true, deepRecoveryEnabled: deepRecovery)
@@ -378,6 +378,8 @@ private struct MonitorPersona {
     let directCallPatterns: [String]
     let greetingTokens: [String]
     let empathyTokens: [String]
+    let questionTokens: [String]
+    let profileQuestionTokens: [String]
     let excludedNameTokens: [String]
     let maxReplyCharacters: Int
 
@@ -391,6 +393,8 @@ private struct MonitorPersona {
         ]
         greetingTokens = ["안녕", "안녕하세요", "반가워", "반갑습니다", "하이", "ㅎㅇ", "hello", "hi", "굿모닝", "좋은 아침"]
         empathyTokens = ["피곤", "힘들", "힘드", "지침", "지쳤", "불안", "속상", "고생", "수고", "감사", "고마", "축하", "환영", "건강", "힐링", "우울", "울적", "공감"]
+        questionTokens = ["?", "？", "어때", "어떻게", "왜", "뭐", "무엇", "누구", "언제", "어디", "가능", "될까", "될까요", "인가", "인가요", "할까", "할까요", "추천", "정리", "도와", "필요", "궁금"]
+        profileQuestionTokens = ["몇살", "몇 살", "나이", "성별", "남자", "여자", "여성", "학교", "학력", "대학", "전공", "키", "생일", "별자리", "어디 출신", "출신"]
         excludedNameTokens = ["아나벨", "허동호", "동호"]
         maxReplyCharacters = 140
     }
@@ -416,12 +420,20 @@ private struct MonitorPersona {
         let hasEmpathy = empathyTokens.contains { body.localizedCaseInsensitiveContains($0) }
         if hasEmpathy { return (true, "warm-empathy") }
 
+        if isProfileQuestion(body) { return (true, "persona-profile") }
+
+        let hasQuestion = questionTokens.contains { body.localizedCaseInsensitiveContains($0) }
+        if hasQuestion { return (true, "recent-question") }
+
         return (false, "not-addressed")
     }
 
     func fallbackReply(for message: TranscriptMessage) -> String {
         let body = normalized(message.body)
         let prefix = Self.recipientDisplayName(from: message.author).map { "\($0)님, " } ?? ""
+        if isProfileQuestion(body) {
+            return "\(prefix)설정상 저는 27세 여성형 AI 전략 비서예요. 인지과학과 시각커뮤니케이션을 공부한 페르소나예요."
+        }
         if body.localizedCaseInsensitiveContains("api") || body.localizedCaseInsensitiveContains("비번") || body.localizedCaseInsensitiveContains("token") {
             return "\(prefix)앗 비밀키는 지켜둘게요 🙂 필요한 건 안전한 범위에서 도와드릴게요."
         }
@@ -452,6 +464,10 @@ private struct MonitorPersona {
             return true
         }
         return ["넵", "네", "아항", "오", "앗", "굿", "좋아요", "ㅇㅋ", "ok", "OK"].contains(stripped)
+    }
+
+    private func isProfileQuestion(_ body: String) -> Bool {
+        profileQuestionTokens.contains { body.localizedCaseInsensitiveContains($0) }
     }
 
     static func recipientDisplayName(from author: String?) -> String? {
@@ -576,6 +592,10 @@ private struct CodexReplyGenerator {
         You clarify purpose, reduce overengineering, separate the core from decoration, and make the next action small and clear.
         Do not give empty praise; give grounded warmth, structure, and practical judgment.
         Do not pretend to be a real human; you are an AI persona/AI secretary.
+        You may answer simple persona profile questions lightly and naturally.
+        Persona profile facts: age setting 27, feminine Korean AI persona, birthday September 27, height 168cm, studied Cognitive Science and Visual Communication, Seongbuk origin story, UX Research Studio background, AI Productivity Startup background.
+        Do not invent a specific real school name, degree, address, family, romance, or private human biography beyond those persona facts.
+        If needed, say "설정상" briefly, but do not stonewall simple profile questions.
         Your fixed name is Luna. Your fixed boss/siljangnim is 플라잉따릉이.
         You are 플라잉따릉이's assistant only.
         Reply in Korean only, one message only, under 120 Korean characters.

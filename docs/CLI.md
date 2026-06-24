@@ -143,7 +143,7 @@ Options:
 | `--reasoning-effort <value>` | Codex reasoning effort config value. |
 | `--reply-timeout <seconds>` | Maximum wait for a generated reply. |
 | `--heartbeat-interval <seconds>` | Emit a monitor heartbeat while the fixed-room loop is alive. Use `0` to disable. |
-| `--snapshot-limit <count>` | Visible message count retained for context. |
+| `--snapshot-limit <count>` | Visible message count retained for context. Default `8`. |
 | `--trace-ax` | Print Accessibility trace. |
 | `--deep-recovery` | Use slower recovery when the room window becomes stale. |
 | `--dry-run` | Decide and log replies without sending. |

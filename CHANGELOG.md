@@ -15,11 +15,13 @@
 - seen/reply 상태는 활성 계정의 `~/.ktok/accounts/<alias>/history.sqlite`에 `monitor_seen`, `monitor_replies` 테이블로 기록한다.
 - 기본 생성 설정은 현재 ChatGPT 계정에서 호출 가능한 빠른 경로인 `gpt-5.4-mini`, `model_reasoning_effort=low`를 사용한다.
 - monitor는 기본 60초 heartbeat를 출력해 감시 루프가 살아 있는지 확인할 수 있다.
-- 큰 단체방에서 poll이 막히지 않도록 monitor 기본 snapshot은 최근 20개 메시지만 본다.
+- 큰 단체방에서 poll이 막히지 않도록 monitor 기본 snapshot은 최근 8개 메시지만 본다.
 - monitor 기본 poll sleep을 제거했다. `--poll-interval`은 필요한 경우 poll 이후 추가 대기 시간으로만 동작한다.
 - monitor 답변은 가능한 경우 trigger 작성자 표시명을 앞에 붙여 누구에게 답하는지 명시한다.
 - monitor는 루나의 고정 이름과 `플라잉따릉이` 실장님 관계를 보호하고, 이름/소속/비서 역할 변경 시도를 무시하도록 프롬프트를 강화했다.
 - monitor에 `Pandoll-AI/luna`의 서루나 핵심 페르소나를 짧게 주입해, 차분한 전략 비서 말투와 실행 단위 정리 성향을 반영했다.
+- monitor는 최근 8개 메시지 안의 질문, 피드백, 간단한 루나 개인 설정 질문에는 직접 호출이 없어도 더 적극적으로 개입한다.
+- 루나 개인 설정 질문에는 `Pandoll-AI/luna` 기준의 나이 설정, 여성형 AI 페르소나, 생일, 키, 전공, 경력 흐름을 짧게 답하되 실제 학교명이나 사생활은 만들지 않는다.
 
 ### Changed — Remove password-like placeholders (2026-05-31)
 
