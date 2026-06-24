@@ -22,6 +22,7 @@ public enum AccessibilityPermission {
 
     /// Ensure accessibility permission by triggering the system prompt and opening settings if needed.
     /// Note: macOS does not allow fully automatic granting; user confirmation in System Settings is required.
+    /// Set KTOK_NO_ACCESSIBILITY_PROMPT=1 for unattended daemons so they fail quietly instead of reopening System Settings.
     @discardableResult
     public static func ensureGranted(
         autoPrompt: Bool = true,
@@ -32,14 +33,18 @@ public enum AccessibilityPermission {
             return true
         }
 
-        if autoPrompt {
+        let suppressPrompt = ProcessInfo.processInfo.environment["KTOK_NO_ACCESSIBILITY_PROMPT"] == "1"
+        let shouldPrompt = autoPrompt && !suppressPrompt
+        let shouldOpenSettings = openSettingsOnFailure && !suppressPrompt
+
+        if shouldPrompt {
             _ = requestIfNeeded()
             if waitUntilGranted(timeout: waitAfterPrompt) {
                 return true
             }
         }
 
-        if openSettingsOnFailure {
+        if shouldOpenSettings {
             openAccessibilitySettings()
         }
 

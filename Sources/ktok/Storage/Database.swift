@@ -47,6 +47,7 @@ final class Database {
         }
         self.handle = rawHandle
 
+        try execute("PRAGMA busy_timeout = 5000")
         try execute("PRAGMA foreign_keys = ON")
         try execute("PRAGMA journal_mode = WAL")
         try execute("PRAGMA synchronous = NORMAL")

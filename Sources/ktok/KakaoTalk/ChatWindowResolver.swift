@@ -1,4 +1,6 @@
 import ApplicationServices.HIServices
+import AppKit
+import CoreGraphics
 import Foundation
 
 enum ChatWindowResolutionMethod {
@@ -102,7 +104,10 @@ struct ChatWindowResolver {
         }
 
         runner.log("close window: fallback via cmd+w")
-        runner.pressCommandW()
+        guard runKakaoKeyboardFallback(label: "close window Cmd+W fallback", action: { runner.pressCommandW() }) else {
+            runner.log("close window: Cmd+W fallback skipped because KakaoTalk is not frontmost")
+            return false
+        }
         return waitForWindowClosed(window, label: "close via cmd+w")
     }
 
@@ -184,38 +189,56 @@ struct ChatWindowResolver {
     }
 
     private func openChatViaSearch(query: String, in rootWindow: UIElement, fallbackWindow: UIElement) throws -> UIElement {
-        // KakaoTalk's default tab is "friends" — its search field only returns
-        // friends, so group-chat queries come back empty. Press the "chatrooms"
-        // tab first so the search field scopes to chat rooms. Idempotent
-        // (pressing an already-active tab is a no-op) and swallows failure —
-        // the downstream search will still log informatively if this was
-        // actually required and didn't take.
+        // KakaoTalk's default tab is often "friends" — its search field only
+        // returns friends, so group-chat queries come back empty. Activate the
+        // chatrooms tab first and then re-select the search root because Cmd+2
+        // or a tab press can change the focused/main window reference.
         activateChatroomsTab(in: rootWindow)
+        let searchRoot = selectSearchWindow(fallback: fallbackWindow)
 
         runner.log("search: locating search field")
 
-        guard let searchField = locateSearchField(in: rootWindow) else {
-            throw KakaoTalkError.elementNotFound("[\(ChatWindowFailureCode.searchMiss.rawValue)] Search field not found")
+        let searchField = locateSearchField(in: searchRoot)
+            ?? recoverSearchFieldWithKeyboardShortcut(in: searchRoot)
+            ?? recoverSearchFieldWithGeometryClick(in: searchRoot)
+
+        guard let searchField else {
+            if let geometryWindow = openChatWithBlindGeometrySearch(
+                query: query,
+                rootWindow: searchRoot,
+                fallbackWindow: fallbackWindow
+            ) {
+                return geometryWindow
+            }
+            if let visibleRowWindow = openVisibleExactChatRow(
+                query: query,
+                rootWindow: searchRoot,
+                fallbackWindow: fallbackWindow
+            ) {
+                return visibleRowWindow
+            }
+            throw KakaoTalkError.elementNotFound("[\(ChatWindowFailureCode.searchMiss.rawValue)] Search field not found after Chats tab activation")
         }
 
-        guard runner.focusWithVerification(searchField, label: "search field", attempts: 1) else {
-            throw KakaoTalkError.actionFailed("[\(ChatWindowFailureCode.focusFail.rawValue)] Could not focus search field")
+        let searchFieldFocused = runner.focusWithVerification(searchField, label: "search field", attempts: 1)
+        if !searchFieldFocused {
+            runner.log("search field: focus verification failed; trying AXValue set before typing fallback")
         }
 
         _ = runner.setTextWithVerification("", on: searchField, label: "search field clear", attempts: 1)
 
         let searchInputReady =
             runner.setTextWithVerification(query, on: searchField, label: "search field input", attempts: 1) ||
-            runner.typeTextWithVerification(query, on: searchField, label: "search field input", attempts: 2)
+            (searchFieldFocused && typeIntoSearchFieldIfSafe(query, searchField: searchField))
 
         guard searchInputReady else {
-            runner.pressEscape()
+            dismissKakaoSearchIfSafe(label: "search input cleanup")
             throw KakaoTalkError.actionFailed("[\(ChatWindowFailureCode.inputNotReflected.rawValue)] Search keyword was not entered")
         }
 
-        let matchingCandidates = waitForMatchingSearchResults(query: query, rootWindow: rootWindow)
+        let matchingCandidates = waitForMatchingSearchResults(query: query, rootWindow: searchRoot)
         guard let matchingResult = pickBestSearchResult(from: matchingCandidates) else {
-            runner.pressEscape()
+            dismissKakaoSearchIfSafe(label: "search miss cleanup")
             throw KakaoTalkError.elementNotFound("[\(ChatWindowFailureCode.searchMiss.rawValue)] No search result found for '\(query)'")
         }
 
@@ -226,7 +249,7 @@ struct ChatWindowResolver {
             resolveOpenedChatWindowFast(query: query) != nil
         }
         guard openTriggered else {
-            runner.pressEscape()
+            dismissKakaoSearchIfSafe(label: "search open cleanup")
             throw KakaoTalkError.actionFailed("[\(ChatWindowFailureCode.searchMiss.rawValue)] Could not open matched search result")
         }
 
@@ -266,11 +289,23 @@ struct ChatWindowResolver {
     }
 
     private func activateChatroomsTab(in rootWindow: UIElement) {
+        kakao.activate()
+        Thread.sleep(forTimeInterval: 0.08)
         let buttons = rootWindow.findAll(role: kAXButtonRole, limit: 24, maxNodes: 220)
         guard let chatroomsButton = buttons.first(where: {
             ($0.identifier ?? "").lowercased() == "chatrooms"
         }) else {
-            runner.log("tab: 'chatrooms' button not found in search root; leaving active tab as-is")
+            runner.log("tab: 'chatrooms' button not found in search root; trying Window > Chats menu item")
+            if activateChatsMenuItem() {
+                Thread.sleep(forTimeInterval: 0.15)
+                return
+            }
+            runner.log("tab: Chats menu item unavailable; falling back to Cmd+2")
+            if runKakaoKeyboardFallback(label: "tab Cmd+2 fallback", action: { runner.pressCommandNumber(2) }) {
+                Thread.sleep(forTimeInterval: 0.2)
+            } else {
+                runner.log("tab: Cmd+2 fallback skipped because KakaoTalk is not frontmost")
+            }
             return
         }
         do {
@@ -279,6 +314,30 @@ struct ChatWindowResolver {
             Thread.sleep(forTimeInterval: 0.1)
         } catch {
             runner.log("tab: chatrooms press failed (\(error)); continuing with current tab")
+        }
+    }
+
+    private func activateChatsMenuItem() -> Bool {
+        let menuBarItems = kakao.applicationElement.findAll(role: kAXMenuBarItemRole, limit: 32, maxNodes: 400)
+        guard let windowMenuBarItem = menuBarItems.first(where: { ($0.title ?? "") == "Window" }) else {
+            runner.log("tab: Window menu bar item not found")
+            return false
+        }
+        let menuItems = windowMenuBarItem.findAll(role: kAXMenuItemRole, limit: 64, maxNodes: 240)
+        guard let chatsItem = menuItems.first(where: { item in
+            let title = (item.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return title == "Chats" || title == "채팅"
+        }) else {
+            runner.log("tab: Window > Chats menu item not found")
+            return false
+        }
+        do {
+            try chatsItem.press()
+            runner.log("tab: activated Chats via menu item")
+            return true
+        } catch {
+            runner.log("tab: Chats menu item press failed (\(error))")
+            return false
         }
     }
 
@@ -293,40 +352,32 @@ struct ChatWindowResolver {
             return cachedSearchField
         }
 
-        let initialFields = discoverSearchFieldCandidates(in: rootWindow)
-        if let field = pickSearchField(from: initialFields) {
-            rememberCachedElement(slot: .searchField, root: rootWindow, element: field)
+        if let field = findAndRememberSearchField(in: rootWindow) {
             return field
         }
 
-        let searchButtons = rootWindow.findAll(role: kAXButtonRole, limit: 24, maxNodes: 220).filter { button in
-            let title = (button.title ?? "").lowercased()
-            let description = (button.axDescription ?? "").lowercased()
-            let identifier = (button.identifier ?? "").lowercased()
-
-            if identifier == "friends" || identifier == "chatrooms" || identifier == "more" {
-                return false
-            }
-
-            return title.contains("search")
-                || title.contains("검색")
-                || description.contains("search")
-                || description.contains("검색")
-                || identifier.contains("search")
-        }
+        // KakaoTalk 26.x often renders the Chats search box collapsed behind a
+        // toolbar icon.  The icon is sometimes unlabeled in AX, so a text-only
+        // button search misses it.  Probe only AXButton elements exposed by the
+        // KakaoTalk AX tree, score them by accessibility metadata first and by
+        // safe header geometry second, and press the best AX button with AXPress.
+        // This is intentionally not a mouse/coordinate click fallback: no screen
+        // coordinates are clicked and no search result is opened unless later
+        // exact-title verification succeeds.
+        let searchButtons = discoverSearchButtonCandidates(in: rootWindow)
+        runner.log("search: AX search-button probe candidates=\(searchButtons.count)")
 
         for button in searchButtons.prefix(4) {
             do {
                 try button.press()
-                runner.log("search: pressed search-like button title='\(button.title ?? "")' id='\(button.identifier ?? "")'")
+                runner.log("search: pressed AX search probe button title='\(button.title ?? "")' id='\(button.identifier ?? "")'")
             } catch {
-                runner.log("search: search-like button press failed (\(error))")
+                runner.log("search: AX search probe button press failed (\(error))")
             }
 
-            Thread.sleep(forTimeInterval: 0.08)
-            let fields = discoverSearchFieldCandidates(in: rootWindow)
-            if let field = pickSearchField(from: fields) {
-                rememberCachedElement(slot: .searchField, root: rootWindow, element: field)
+            Thread.sleep(forTimeInterval: 0.12)
+            if let field = findAndRememberSearchField(in: rootWindow) {
+                runner.log("search: field exposed after AX search-button probe")
                 return field
             }
         }
@@ -334,16 +385,245 @@ struct ChatWindowResolver {
         return nil
     }
 
+    private func findAndRememberSearchField(in rootWindow: UIElement) -> UIElement? {
+        let fields = discoverSearchFieldCandidates(in: rootWindow)
+        if let field = pickSearchField(from: fields) {
+            rememberCachedElement(slot: .searchField, root: rootWindow, element: field)
+            return field
+        }
+        return nil
+    }
+
+    private func recoverSearchFieldWithKeyboardShortcut(in rootWindow: UIElement) -> UIElement? {
+        runner.log("search: attempting bounded keyboard fallback Cmd+F")
+        guard ensureKakaoFrontmost(label: "search Cmd+F fallback") else {
+            runner.log("search: Cmd+F fallback skipped because KakaoTalk is not frontmost; HID events would target another app/session")
+            return nil
+        }
+        runner.pressCommandF()
+        Thread.sleep(forTimeInterval: 0.18)
+        if let field = findAndRememberSearchField(in: rootWindow) {
+            runner.log("search: field exposed after Cmd+F fallback")
+            return field
+        }
+        runner.log("search: Cmd+F fallback did not expose AX search field")
+        return nil
+    }
+
+    private func recoverSearchFieldWithGeometryClick(in rootWindow: UIElement) -> UIElement? {
+        let probes = searchIconGeometryProbePoints(rootWindow: rootWindow)
+        guard !probes.isEmpty else {
+            runner.log("search: geometry fallback unavailable; no KakaoTalk onscreen window bounds")
+            return nil
+        }
+
+        runner.log("search: attempting bounded geometry fallback probeCount=\(probes.count) reason=AX search controls unavailable")
+        for (index, probe) in probes.enumerated() {
+            guard ensureKakaoFrontmost(label: "search geometry fallback probe \(index + 1)") else {
+                runner.log("search: geometry probe \(index + 1) skipped because KakaoTalk is not frontmost; HID click would target another app/session")
+                break
+            }
+            runner.log(
+                "search: geometry probe \(index + 1)/\(probes.count) bounds=\(formatRect(probe.windowBounds)) point=\(formatPoint(probe.point)) rel=\(probe.relativeDescription)"
+            )
+            guard runner.clickScreenPoint(probe.point, label: "search geometry fallback") else {
+                continue
+            }
+            Thread.sleep(forTimeInterval: 0.45)
+            if let field = findAndRememberSearchField(in: rootWindow) {
+                runner.log("search: field exposed after geometry fallback probe \(index + 1)")
+                return field
+            }
+        }
+
+        runner.log("search: geometry fallback did not expose AX search field after \(probes.count) probes")
+        return nil
+    }
+
+    private func openChatWithBlindGeometrySearch(query: String, rootWindow: UIElement, fallbackWindow: UIElement) -> UIElement? {
+        // Deliberately conservative: geometry clicks are allowed as bounded,
+        // logged recovery, but text entry is not allowed unless an input target
+        // or exact AX result is verified.  Typing query+Enter into an unknown
+        // focused element can send to a wrong already-open chat.
+        runner.log("search: blind geometry typing/open disabled; no verified search field or exact AX result")
+        return nil
+    }
+
+    private func discoverSearchButtonCandidates(in rootWindow: UIElement) -> [UIElement] {
+        var roots: [UIElement] = [rootWindow]
+        if let focusedWindow = kakao.focusedWindow { roots.append(focusedWindow) }
+        if let mainWindow = kakao.mainWindow { roots.append(mainWindow) }
+        roots = deduplicateElements(roots)
+
+        let pressableRoles: Set<String> = [
+            kAXButtonRole,
+            kAXGroupRole,
+            kAXImageRole,
+            kAXCellRole,
+        ]
+
+        var scored: [(button: UIElement, score: Int)] = []
+        for root in roots {
+            let candidates = collectDescendants(
+                from: root,
+                roles: pressableRoles,
+                limit: 80,
+                maxNodes: 900,
+                includeAlternateChildAttributes: true
+            )
+            for candidate in candidates {
+                let score = scoreSearchProbeButton(candidate, rootWindow: rootWindow)
+                guard score > 0 else { continue }
+                scored.append((candidate, score))
+            }
+        }
+
+        let unique = deduplicateElements(
+            scored
+                .sorted { lhs, rhs in lhs.score > rhs.score }
+                .map(\.button)
+        )
+        if unique.isEmpty {
+            runner.log("search: AX search-button probe saw no safe pressable header candidates")
+        }
+        return unique
+    }
+
+    private func scoreSearchProbeButton(_ button: UIElement, rootWindow: UIElement) -> Int {
+        let identifier = (button.identifier ?? "").lowercased()
+        if identifier == "friends" || identifier == "chatrooms" || identifier == "more" {
+            return 0
+        }
+        guard supportsAction("AXPress", on: button) else { return 0 }
+
+        let title = (button.title ?? "").lowercased()
+        let description = (button.axDescription ?? "").lowercased()
+        let joined = [identifier, title, description].joined(separator: " ")
+        let hasSearchMetadata = joined.contains("search") || joined.contains("검색")
+        guard let geometryScore = scoreHeaderSearchButtonGeometry(button, rootWindow: rootWindow) else {
+            return 0
+        }
+
+        var score = geometryScore
+        if hasSearchMetadata {
+            score += 10_000
+        }
+
+        // Keep the probe conservative: the element must be an AX-pressable
+        // control in the chat-list header geometry. Search metadata boosts the
+        // score, but does not override the geometry/root containment guard.
+        return score >= 1_000 ? score : 0
+    }
+
+    private func scoreHeaderSearchButtonGeometry(_ button: UIElement, rootWindow: UIElement) -> Int? {
+        guard
+            let buttonFrame = button.frame,
+            let windowFrame = rootWindow.frame,
+            windowFrame.width > 0,
+            windowFrame.height > 0,
+            isElementLikelyInsideWindow(elementFrame: buttonFrame, windowFrame: windowFrame)
+        else {
+            return nil
+        }
+
+        let relativeX = (buttonFrame.midX - windowFrame.minX) / windowFrame.width
+        let relativeY = (buttonFrame.midY - windowFrame.minY) / windowFrame.height
+        let side = buttonFrame.width
+        let height = buttonFrame.height
+
+        guard side >= 10, side <= 48, height >= 10, height <= 48 else { return nil }
+        guard relativeY >= 0.03, relativeY <= 0.22 else { return nil }
+        guard relativeX >= 0.62, relativeX <= 0.92 else { return nil }
+
+        // The compose/new-chat button sits farther right than the search icon in
+        // the Chats header.  Favor the left member of the top-right button group.
+        let distanceFromExpectedSearchX = abs(relativeX - 0.82)
+        let geometryScore = max(0, 4_000 - Int(distanceFromExpectedSearchX * 10_000))
+        return 1_000 + geometryScore
+    }
+
     private func discoverSearchFieldCandidates(in rootWindow: UIElement) -> [UIElement] {
         var fields: [UIElement] = []
-        fields.append(contentsOf: rootWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
+        fields.append(contentsOf: collectDescendants(
+            from: rootWindow,
+            roles: [kAXTextFieldRole],
+            limit: 12,
+            maxNodes: 220,
+            includeAlternateChildAttributes: true
+        ))
         if let focusedWindow = kakao.focusedWindow {
-            fields.append(contentsOf: focusedWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
+            fields.append(contentsOf: collectDescendants(
+                from: focusedWindow,
+                roles: [kAXTextFieldRole],
+                limit: 12,
+                maxNodes: 220,
+                includeAlternateChildAttributes: true
+            ))
         }
         if let mainWindow = kakao.mainWindow {
-            fields.append(contentsOf: mainWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
+            fields.append(contentsOf: collectDescendants(
+                from: mainWindow,
+                roles: [kAXTextFieldRole],
+                limit: 12,
+                maxNodes: 220,
+                includeAlternateChildAttributes: true
+            ))
         }
-        return fields.filter { $0.isEnabled }
+        return deduplicateElements(fields).filter { $0.isEnabled }
+    }
+
+    private func collectDescendants(
+        from root: UIElement,
+        roles: Set<String>,
+        limit: Int,
+        maxNodes: Int,
+        includeAlternateChildAttributes: Bool
+    ) -> [UIElement] {
+        var results: [UIElement] = []
+        var queue = childElements(of: root, includeAlternateChildAttributes: includeAlternateChildAttributes)
+        var visited: [UIElement] = []
+        var index = 0
+
+        while index < queue.count && visited.count < maxNodes && results.count < limit {
+            let current = queue[index]
+            index += 1
+            if visited.contains(where: { areSameAXElement($0, current) }) {
+                continue
+            }
+            visited.append(current)
+
+            if let role = current.role, roles.contains(role) {
+                results.append(current)
+                if results.count >= limit { break }
+            }
+
+            let children = childElements(of: current, includeAlternateChildAttributes: includeAlternateChildAttributes)
+            for child in children where !visited.contains(where: { areSameAXElement($0, child) }) {
+                queue.append(child)
+            }
+        }
+
+        return deduplicateElements(results)
+    }
+
+    private func childElements(of element: UIElement, includeAlternateChildAttributes: Bool) -> [UIElement] {
+        var children = element.children
+        guard includeAlternateChildAttributes else {
+            return deduplicateElements(children)
+        }
+
+        let alternateAttributes = [
+            "AXVisibleChildren",
+            "AXChildrenInNavigationOrder",
+            "AXContents",
+        ]
+        for attributeName in alternateAttributes {
+            if let axChildren: [AXUIElement] = element.attributeOptional(attributeName) {
+                children.append(contentsOf: axChildren.map { UIElement($0) })
+            }
+        }
+
+        return deduplicateElements(children)
     }
 
     private func waitForMatchingSearchResults(query: String, rootWindow: UIElement) -> [SearchCandidate] {
@@ -464,6 +744,48 @@ struct ChatWindowResolver {
         return resolved ?? resolveOpenedChatWindow(query: query, fallbackWindow: fallbackWindow)
     }
 
+    private func openVisibleExactChatRow(query: String, rootWindow: UIElement, fallbackWindow: UIElement) -> UIElement? {
+        runner.log("search: field unavailable; probing visible chat-list rows by exact title")
+        let visibleRows = ChatListScanner().scan(in: rootWindow, limit: 80) { message in
+            runner.log("search-row: \(message)")
+        }
+        let matches = visibleRows.filter { snapshot in
+            scoreQueryMatch(query: query, candidateText: snapshot.discovery.title) > 0
+        }
+
+        guard matches.count == 1, let match = matches.first else {
+            runner.log("search: visible exact-row fallback refused; matches=\(matches.count)")
+            return nil
+        }
+
+        runner.log("search: visible exact-row candidate title='\(match.discovery.title)' index=\(match.discovery.listIndex)")
+        if tryActivateSearchResult(match.element, label: "visible-chat-row") {
+            if let opened = waitForOpenedChatWindow(query: query, fallbackWindow: fallbackWindow) {
+                return opened
+            }
+            runner.log("search: visible exact-row AXPress/AXConfirm was not verified; refusing Enter fallback")
+            return nil
+        }
+
+        let selected = trySelectSearchResult(match.element, label: "visible-chat-row")
+        guard selected, isElementSelected(match.element) else {
+            runner.log("search: visible exact-row selection was not verified; refusing Enter fallback")
+            return nil
+        }
+
+        runner.log("search: visible exact-row selected; confirming via Enter")
+        guard runKakaoKeyboardFallback(label: "visible exact-row Enter fallback", action: { runner.pressEnterKey() }) else {
+            runner.log("search: visible exact-row Enter fallback skipped because KakaoTalk is not frontmost")
+            return nil
+        }
+        if let opened = waitForOpenedChatWindow(query: query, fallbackWindow: fallbackWindow) {
+            return opened
+        }
+
+        runner.log("search: visible exact-row fallback did not open verified exact-title window")
+        return nil
+    }
+
     private func resolveOpenedChatWindowFast(query: String) -> UIElement? {
         if let matchedWindow = findMatchingChatWindow(in: kakao.windows, query: query) {
             return matchedWindow
@@ -480,27 +802,11 @@ struct ChatWindowResolver {
     }
 
     private func resolveOpenedChatWindow(query: String, fallbackWindow: UIElement) -> UIElement? {
-        if let fastWindow = resolveOpenedChatWindowFast(query: query) {
-            return fastWindow
-        }
-
-        if let matchedWindow = findMatchingChatWindow(in: kakao.windows, query: query) {
-            return matchedWindow
-        }
-
-        if let focusedWindow = kakao.focusedWindow, windowContainsLikelyChatInput(focusedWindow) {
-            return focusedWindow
-        }
-
-        if windowContainsLikelyChatInput(fallbackWindow) {
-            return fallbackWindow
-        }
-
-        if let mainWindow = kakao.mainWindow, windowContainsLikelyChatInput(mainWindow) {
-            return mainWindow
-        }
-
-        return nil
+        // Safety: after an exact search-result match, only accept a chat window
+        // whose title also matches exactly after normalization. Do not fall back
+        // to "likely chat input" windows here; that can turn a wrong opened room
+        // into a valid send target.
+        return resolveOpenedChatWindowFast(query: query)
     }
 
     private func windowContainsLikelyChatInput(_ window: UIElement) -> Bool {
@@ -562,6 +868,10 @@ struct ChatWindowResolver {
 
     private func pickBestSearchResult(from candidates: [SearchCandidate]) -> UIElement? {
         guard !candidates.isEmpty else { return nil }
+        guard candidates.count == 1 else {
+            runner.log("search: refusing ambiguous exact search candidates count=\(candidates.count)")
+            return nil
+        }
         let best = candidates.max { lhs, rhs in
             scoreSearchResult(lhs) < scoreSearchResult(rhs)
         }
@@ -629,7 +939,10 @@ struct ChatWindowResolver {
             kakao.activate()
             if runner.focusWithVerification(searchField, label: "search field confirm", attempts: 1) {
                 runner.log("search: fallback confirm via Enter")
-                runner.pressEnterKey()
+                guard runKakaoKeyboardFallback(label: "search confirm Enter fallback", action: { runner.pressEnterKey() }) else {
+                    runner.log("search: fallback confirm Enter skipped because KakaoTalk is not frontmost")
+                    return didTriggerAction
+                }
                 didTriggerAction = true
                 if runner.waitUntil(label: "search open confirm", timeout: 0.18, pollInterval: 0.05, evaluateAfterTimeout: false, condition: opened) {
                     return true
@@ -641,20 +954,7 @@ struct ChatWindowResolver {
             runner.log("search: skipping Enter fallback because result selection was not available")
         }
 
-        kakao.activate()
-        if searchField.isFocused || runner.focusWithVerification(searchField, label: "search field confirm", attempts: 1) {
-            runner.log("search: fallback confirm via Down+Enter")
-            runner.pressDownArrowKey()
-            Thread.sleep(forTimeInterval: 0.03)
-            runner.pressEnterKey()
-            didTriggerAction = true
-            if runner.waitUntil(label: "search open confirm", timeout: 0.22, pollInterval: 0.05, evaluateAfterTimeout: false, condition: opened) {
-                return true
-            }
-        } else {
-            runner.log("search: Down+Enter skipped (search field focus unavailable)")
-        }
-
+        runner.log("search: Down+Enter fallback disabled; refusing to open non-selected search results")
         return didTriggerAction
     }
 
@@ -697,22 +997,29 @@ struct ChatWindowResolver {
         }
     }
 
+    private func isElementSelected(_ element: UIElement) -> Bool {
+        element.attributeOptional("AXSelected") ?? false
+    }
+
     private func supportsAction(_ action: String, on element: UIElement) -> Bool {
         guard let actions = try? element.actionNames() else { return false }
         return actions.contains(action)
     }
 
     private func findMatchingChatWindow(in windows: [UIElement], query: String) -> UIElement? {
-        windows.compactMap { window -> (window: UIElement, score: Int)? in
+        let matches = windows.compactMap { window -> (window: UIElement, score: Int)? in
             guard let title = window.title else { return nil }
             let score = scoreQueryMatch(query: query, candidateText: title)
             guard score > 0 else { return nil }
             return (window, score)
         }
-        .max(by: { lhs, rhs in
+        guard matches.count <= 1 else {
+            runner.log("window: refusing ambiguous exact-title windows count=\(matches.count) query='\(query)'")
+            return nil
+        }
+        return matches.max(by: { lhs, rhs in
             lhs.score < rhs.score
-        })?
-        .window
+        })?.window
     }
 
     private func bestQueryMatch(
@@ -785,57 +1092,12 @@ struct ChatWindowResolver {
         let candidateNormalized = normalizeSearchToken(candidateText)
         guard !queryNormalized.isEmpty, !candidateNormalized.isEmpty else { return 0 }
 
-        if queryNormalized == candidateNormalized {
-            return 12_000
-        }
-        if candidateNormalized.hasPrefix(queryNormalized) {
-            return 10_500
-        }
-        if candidateNormalized.contains(queryNormalized) {
-            return 9_800
-        }
-        if queryNormalized.contains(candidateNormalized), candidateNormalized.count >= 2 {
-            return 8_800
-        }
-
-        let queryVariants = honorificVariants(of: queryNormalized)
-        let candidateVariants = honorificVariants(of: candidateNormalized)
-        var best = 0
-
-        for queryVariant in queryVariants where !queryVariant.isEmpty {
-            for candidateVariant in candidateVariants where !candidateVariant.isEmpty {
-                if queryVariant == candidateVariant {
-                    best = max(best, 8_700)
-                    continue
-                }
-                if candidateVariant.hasPrefix(queryVariant) {
-                    best = max(best, 8_400)
-                    continue
-                }
-                if candidateVariant.contains(queryVariant) {
-                    best = max(best, 8_200)
-                    continue
-                }
-                if queryVariant.contains(candidateVariant), candidateVariant.count >= 2 {
-                    best = max(best, 7_900)
-                }
-            }
-        }
-
-        if best > 0 {
-            return best
-        }
-
-        let minLength = min(queryNormalized.count, candidateNormalized.count)
-        if minLength >= 2 {
-            let shortest = queryNormalized.count <= candidateNormalized.count ? queryNormalized : candidateNormalized
-            let longest = queryNormalized.count > candidateNormalized.count ? queryNormalized : candidateNormalized
-            if longest.contains(shortest) {
-                return 6_600
-            }
-        }
-
-        return 0
+        // Recipient/window safety rule: ktok channel resolution must not use
+        // partial/contains matching. Search result groups often include message
+        // previews and other neighboring text; opening a result because some
+        // descendant merely contains the query can target the wrong room. Allow
+        // only normalized exact equality (whitespace/punctuation/width folded).
+        return queryNormalized == candidateNormalized ? 12_000 : 0
     }
 
     private func normalizeSearchToken(_ text: String) -> String {
@@ -859,17 +1121,6 @@ struct ChatWindowResolver {
         return String(scalars)
     }
 
-    private func honorificVariants(of text: String) -> [String] {
-        let suffixes = ["선생님", "님", "씨"]
-        var variants = Set<String>([text])
-        for suffix in suffixes where text.hasSuffix(suffix) {
-            let candidate = String(text.dropLast(suffix.count))
-            if !candidate.isEmpty {
-                variants.insert(candidate)
-            }
-        }
-        return Array(variants)
-    }
 
     private func deduplicateSearchCandidates(_ candidates: [SearchCandidate]) -> [SearchCandidate] {
         var unique: [SearchCandidate] = []
@@ -972,6 +1223,45 @@ struct ChatWindowResolver {
         return false
     }
 
+    private func ensureKakaoFrontmost(label: String) -> Bool {
+        let before = NSWorkspace.shared.frontmostApplication
+        runner.log("\(label): frontmost before bundle='\(before?.bundleIdentifier ?? "")' pid=\(before?.processIdentifier ?? -1)")
+        kakao.activate()
+        if let rootWindow = kakao.focusedWindow ?? kakao.mainWindow ?? kakao.windows.first {
+            _ = tryRaiseWindow(rootWindow)
+        }
+        let expectedPID = KakaoTalkApp.runningApplication?.processIdentifier
+        let becameFrontmost = runner.waitUntil(label: "\(label) frontmost", timeout: 0.6, pollInterval: 0.06, evaluateAfterTimeout: true) {
+            guard let frontmost = NSWorkspace.shared.frontmostApplication else { return false }
+            return frontmost.bundleIdentifier == KakaoTalkApp.bundleIdentifier || frontmost.processIdentifier == expectedPID
+        }
+        let after = NSWorkspace.shared.frontmostApplication
+        runner.log("\(label): frontmost after bundle='\(after?.bundleIdentifier ?? "")' pid=\(after?.processIdentifier ?? -1) ok=\(becameFrontmost)")
+        return becameFrontmost
+    }
+
+    @discardableResult
+    private func runKakaoKeyboardFallback(label: String, action: () -> Void) -> Bool {
+        guard ensureKakaoFrontmost(label: label) else {
+            runner.log("\(label): skipped keyboard HID event because KakaoTalk is not frontmost")
+            return false
+        }
+        action()
+        return true
+    }
+
+    private func typeIntoSearchFieldIfSafe(_ query: String, searchField: UIElement) -> Bool {
+        guard ensureKakaoFrontmost(label: "search field typing fallback") else {
+            runner.log("search field input: typing fallback skipped because KakaoTalk is not frontmost")
+            return false
+        }
+        return runner.typeTextWithVerification(query, on: searchField, label: "search field input", attempts: 2)
+    }
+
+    private func dismissKakaoSearchIfSafe(label: String) {
+        _ = runKakaoKeyboardFallback(label: "\(label) Escape fallback", action: { runner.pressEscape() })
+    }
+
     private func findCloseButton(in window: UIElement) -> UIElement? {
         let buttons = window.findAll(role: kAXButtonRole, limit: 6, maxNodes: 80)
         if let match = buttons.first(where: { button in
@@ -985,7 +1275,8 @@ struct ChatWindowResolver {
             return match
         }
 
-        return buttons.first
+        runner.log("close window: no verified close button found; refusing arbitrary first-button fallback")
+        return nil
     }
 
     private func waitForWindowClosed(_ window: UIElement, label: String) -> Bool {
@@ -998,6 +1289,93 @@ struct ChatWindowResolver {
 
     private func areSameAXElement(_ lhs: UIElement, _ rhs: UIElement) -> Bool {
         CFEqual(lhs.axElement, rhs.axElement)
+    }
+
+    private struct GeometryProbe {
+        let windowBounds: CGRect
+        let point: CGPoint
+        let relativeDescription: String
+    }
+
+    private func searchIconGeometryProbePoints(rootWindow: UIElement) -> [GeometryProbe] {
+        guard let bounds = primaryKakaoOnscreenWindowBounds(preferredFrame: rootWindow.frame) else { return [] }
+        // KakaoTalk 26.x chat-list header: search icon is the left member of the
+        // top-right toolbar pair. Probe a tiny bounded cluster in the header to
+        // tolerate titlebar/theme/version drift. Every point is window-relative
+        // and logged before use.
+        let xs: [CGFloat] = [0.817, 0.785, 0.850]
+        let ys: [CGFloat] = [0.044, 0.055, 0.070]
+        return xs.flatMap { x in
+            ys.map { y in
+                GeometryProbe(
+                    windowBounds: bounds,
+                    point: CGPoint(x: bounds.minX + bounds.width * x, y: bounds.minY + bounds.height * y),
+                    relativeDescription: String(format: "x=%.3f y=%.3f", Double(x), Double(y))
+                )
+            }
+        }
+    }
+
+    private func primaryKakaoOnscreenWindowBounds(preferredFrame: CGRect?) -> CGRect? {
+        guard let pid = KakaoTalkApp.runningApplication?.processIdentifier else { return nil }
+        let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
+        guard let windowInfo = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        var candidates: [(bounds: CGRect, area: CGFloat, overlap: CGFloat)] = []
+        var rejectedForPID = 0
+        for info in windowInfo {
+            guard intValue(info[kCGWindowOwnerPID as String]) == Int(pid) else { continue }
+            guard intValue(info[kCGWindowLayer as String]) == 0 else { continue }
+            guard let boundsDict = info[kCGWindowBounds as String] as? [String: Any] else { continue }
+            let bounds = CGRect(
+                x: numberValue(boundsDict["X"]),
+                y: numberValue(boundsDict["Y"]),
+                width: numberValue(boundsDict["Width"]),
+                height: numberValue(boundsDict["Height"])
+            )
+            guard bounds.width >= 280, bounds.height >= 360 else {
+                rejectedForPID += 1
+                continue
+            }
+            let overlap = preferredFrame.map { bounds.intersection($0).width * bounds.intersection($0).height } ?? 0
+            candidates.append((bounds, bounds.width * bounds.height, overlap))
+        }
+
+        runner.log("search: CGWindow geometry candidates=\(candidates.count) rejectedSmall=\(rejectedForPID)")
+        if let preferred = candidates.max(by: { lhs, rhs in lhs.overlap < rhs.overlap }), preferred.overlap > 0 {
+            runner.log("search: selected CGWindow by AX-frame overlap overlap=\(Int(preferred.overlap))")
+            return preferred.bounds
+        }
+        let largest = candidates.max { lhs, rhs in lhs.area < rhs.area }
+        if let largest {
+            runner.log("search: selected CGWindow by largest area area=\(Int(largest.area))")
+        }
+        return largest?.bounds
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? Int32 { return Int(value) }
+        if let value = value as? NSNumber { return value.intValue }
+        return nil
+    }
+
+    private func numberValue(_ value: Any?) -> CGFloat {
+        if let value = value as? CGFloat { return value }
+        if let value = value as? Double { return CGFloat(value) }
+        if let value = value as? Int { return CGFloat(value) }
+        if let value = value as? NSNumber { return CGFloat(truncating: value) }
+        return 0
+    }
+
+    private func formatRect(_ rect: CGRect) -> String {
+        "x=\(Int(rect.minX)) y=\(Int(rect.minY)) w=\(Int(rect.width)) h=\(Int(rect.height))"
+    }
+
+    private func formatPoint(_ point: CGPoint) -> String {
+        "x=\(Int(point.x)) y=\(Int(point.y))"
     }
 
     private func isElementLikelyInsideWindow(elementFrame: CGRect, windowFrame: CGRect) -> Bool {
