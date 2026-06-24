@@ -22,6 +22,8 @@
 - monitor에 `Pandoll-AI/luna`의 서루나 핵심 페르소나를 짧게 주입해, 차분한 전략 비서 말투와 실행 단위 정리 성향을 반영했다.
 - monitor는 최근 8개 메시지 안의 질문, 피드백, 간단한 루나 개인 설정 질문에는 직접 호출이 없어도 더 적극적으로 개입한다.
 - 루나 개인 설정 질문에는 `Pandoll-AI/luna` 기준의 나이 설정, 여성형 AI 페르소나, 생일, 키, 전공, 경력 흐름을 짧게 답하되 실제 학교명이나 사생활은 만들지 않는다.
+- monitor는 초기 read/resolve 실패와 recovery 실패를 JSONL 이벤트로 남기며, 연속 recovery 실패가 기본 6회 누적되면 같은 argv로 자기 자신을 재시작한다.
+- `luna` persona는 `아나벨`에게 직접 답할 때 장난스럽고 센스 있는 약간의 질투를 섞을 수 있다.
 
 ### Changed — Remove password-like placeholders (2026-05-31)
 

@@ -1,6 +1,7 @@
 import ArgumentParser
 import ApplicationServices.HIServices
 import CryptoKit
+import Darwin
 import Foundation
 
 struct MonitorCommand: ParsableCommand {
@@ -32,6 +33,12 @@ struct MonitorCommand: ParsableCommand {
 
     @Option(name: .long, help: "Maximum visible messages to keep in each fixed-room snapshot")
     var snapshotLimit: Int = 8
+
+    @Option(name: .long, help: "Restart this monitor after N consecutive read recovery failures. Use 0 to disable")
+    var restartAfterReadFailures: Int = 6
+
+    @Option(name: .long, help: "Seconds to wait before self-restarting the monitor")
+    var restartDelay: Double = 1
 
     @Flag(name: .long, help: "Show AX traversal and monitor trace")
     var traceAX: Bool = false
@@ -74,8 +81,15 @@ struct MonitorCommand: ParsableCommand {
         let resolver = ChatWindowResolver(kakao: kakao, runner: runner, useCache: true, deepRecoveryEnabled: deepRecovery)
         let messageContextResolver = MessageContextResolver(kakao: kakao, runner: runner)
         let transcriptReader = KakaoTalkTranscriptReader(kakao: kakao, runner: runner)
+        let restartFailureLimit = max(0, restartAfterReadFailures)
 
-        let resolution = try resolver.resolve(query: chat)
+        let resolution: ChatWindowResolution
+        do {
+            resolution = try resolver.resolve(query: chat)
+        } catch {
+            emitReadError(event: "initial_resolve_failed", error: error, chat: chat)
+            try restartSelf(reason: "initial_resolve_failed", error: error, failureCount: 1)
+        }
         var currentWindow = resolution.window
         var currentChatTitle = currentWindow.title ?? chat
         var cachedContext: MessageTranscriptContext?
@@ -84,15 +98,40 @@ struct MonitorCommand: ParsableCommand {
         var sentBodies = Set(try MonitorStateStore.recentSentBodies(db: db, monitorID: monitorID, limit: 40))
         var pollCount = 0
         var lastHeartbeatAt = Date()
+        var consecutiveReadRecoveryFailures = 0
 
-        let initial = try readSnapshot(
-            transcriptReader: transcriptReader,
-            messageContextResolver: messageContextResolver,
-            currentWindow: currentWindow,
-            currentChatTitle: currentChatTitle,
-            snapshotLimit: boundedSnapshotLimit,
-            cachedContext: &cachedContext
-        )
+        let initial: TranscriptSnapshot
+        do {
+            initial = try readSnapshot(
+                transcriptReader: transcriptReader,
+                messageContextResolver: messageContextResolver,
+                currentWindow: currentWindow,
+                currentChatTitle: currentChatTitle,
+                snapshotLimit: boundedSnapshotLimit,
+                cachedContext: &cachedContext
+            )
+        } catch {
+            emitReadError(event: "initial_read_failed", error: error, chat: currentChatTitle)
+            do {
+                initial = try recoverSnapshot(
+                    resolver: resolver,
+                    transcriptReader: transcriptReader,
+                    messageContextResolver: messageContextResolver,
+                    currentWindow: &currentWindow,
+                    currentChatTitle: &currentChatTitle,
+                    snapshotLimit: boundedSnapshotLimit,
+                    cachedContext: &cachedContext
+                )
+                emit([
+                    "event": "initial_read_recovered",
+                    "chat": initial.chat,
+                    "visible_messages": initial.messages.count,
+                ])
+            } catch {
+                emitReadError(event: "initial_read_recovery_failed", error: error, chat: currentChatTitle)
+                try restartSelf(reason: "initial_read_recovery_failed", error: error, failureCount: 1)
+            }
+        }
         currentChatTitle = initial.chat
         recentMessages = initial.messages
         watchState.replaceBaseline(with: initial.messages)
@@ -111,16 +150,23 @@ struct MonitorCommand: ParsableCommand {
                     cachedContext: &cachedContext
                 )
             } catch {
-                emit(["event": "read_failed", "error": String(describing: error)])
-                if let recovered = try? recoverSnapshot(
-                    resolver: resolver,
-                    transcriptReader: transcriptReader,
-                    messageContextResolver: messageContextResolver,
-                    currentWindow: &currentWindow,
-                    currentChatTitle: &currentChatTitle,
-                    snapshotLimit: boundedSnapshotLimit,
-                    cachedContext: &cachedContext
-                ) {
+                emitReadError(event: "read_failed", error: error, chat: currentChatTitle)
+                do {
+                    let recovered = try recoverSnapshot(
+                        resolver: resolver,
+                        transcriptReader: transcriptReader,
+                        messageContextResolver: messageContextResolver,
+                        currentWindow: &currentWindow,
+                        currentChatTitle: &currentChatTitle,
+                        snapshotLimit: boundedSnapshotLimit,
+                        cachedContext: &cachedContext
+                    )
+                    emit([
+                        "event": "read_recovered",
+                        "chat": recovered.chat,
+                        "visible_messages": recovered.messages.count,
+                    ])
+                    consecutiveReadRecoveryFailures = 0
                     recentMessages = recovered.messages
                     let emitted = watchState.consume(snapshotMessages: recovered.messages)
                     try handle(
@@ -133,11 +179,28 @@ struct MonitorCommand: ParsableCommand {
                         recentMessages: &recentMessages,
                         sentBodies: &sentBodies
                     )
+                } catch {
+                    consecutiveReadRecoveryFailures += 1
+                    emitReadError(event: "read_recovery_failed", error: error, chat: currentChatTitle)
+                    emit([
+                        "event": "read_failure_streak",
+                        "chat": currentChatTitle,
+                        "failures": consecutiveReadRecoveryFailures,
+                        "restart_after": restartFailureLimit,
+                    ])
+                    if restartFailureLimit > 0 && consecutiveReadRecoveryFailures >= restartFailureLimit {
+                        try restartSelf(
+                            reason: "read_recovery_failure_limit",
+                            error: error,
+                            failureCount: consecutiveReadRecoveryFailures
+                        )
+                    }
                 }
                 continue
             }
 
             currentChatTitle = snapshot.chat
+            consecutiveReadRecoveryFailures = 0
             recentMessages = snapshot.messages
             let emitted = watchState.consume(snapshotMessages: snapshot.messages)
             pollCount += 1
@@ -240,7 +303,12 @@ struct MonitorCommand: ParsableCommand {
 
             let decision = persona.decision(for: message, sentBodies: sentBodies)
             guard decision.shouldRespond else {
-                emit(["event": "skip", "reason": decision.reason, "author": message.author ?? "(me)"])
+                emit([
+                    "event": "skip",
+                    "reason": decision.reason,
+                    "author": message.author ?? "(me)",
+                    "body": persona.logSnippet(message.body),
+                ])
                 continue
             }
 
@@ -343,6 +411,70 @@ struct MonitorCommand: ParsableCommand {
         ])
     }
 
+    private func emitReadError(event: String, error: Error, chat: String) {
+        var payload: [String: Any] = [
+            "event": event,
+            "chat": chat,
+            "error": String(describing: error),
+        ]
+        if let description = localizedDescription(for: error) {
+            payload["detail"] = description
+        }
+        emit(payload)
+    }
+
+    private func localizedDescription(for error: Error) -> String? {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription {
+            return description
+        }
+        let description = error.localizedDescription
+        return description == String(describing: error) ? nil : description
+    }
+
+    private func restartSelf(reason: String, error: Error, failureCount: Int) throws -> Never {
+        let boundedDelay = max(0, min(restartDelay, 30))
+        emit([
+            "event": "self_restart",
+            "reason": reason,
+            "error": String(describing: error),
+            "failures": failureCount,
+            "delay_seconds": boundedDelay,
+        ])
+        fflush(stdout)
+        fflush(stderr)
+
+        if boundedDelay > 0 {
+            Thread.sleep(forTimeInterval: boundedDelay)
+        }
+
+        let arguments = CommandLine.arguments
+        guard let executable = arguments.first, !executable.isEmpty else {
+            throw KakaoTalkError.actionFailed("Cannot restart monitor: executable path is empty")
+        }
+
+        let cArguments = arguments.map { strdup($0) } + [nil]
+        defer {
+            for case let argument? in cArguments {
+                free(argument)
+            }
+        }
+
+        executable.withCString { executablePath in
+            cArguments.withUnsafeBufferPointer { buffer in
+                _ = execv(executablePath, UnsafeMutablePointer(mutating: buffer.baseAddress))
+            }
+        }
+
+        let execError = String(cString: strerror(errno))
+        emit([
+            "event": "self_restart_failed",
+            "reason": reason,
+            "error": execError,
+        ])
+        throw KakaoTalkError.actionFailed("Cannot restart monitor: \(execError)")
+    }
+
     private func emit(_ object: [String: Any]) {
         if json {
             guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
@@ -380,6 +512,8 @@ private struct MonitorPersona {
     let empathyTokens: [String]
     let questionTokens: [String]
     let profileQuestionTokens: [String]
+    let searchRequestTokens: [String]
+    let bossAuthorTokens: [String]
     let excludedNameTokens: [String]
     let maxReplyCharacters: Int
 
@@ -395,6 +529,8 @@ private struct MonitorPersona {
         empathyTokens = ["피곤", "힘들", "힘드", "지침", "지쳤", "불안", "속상", "고생", "수고", "감사", "고마", "축하", "환영", "건강", "힐링", "우울", "울적", "공감"]
         questionTokens = ["?", "？", "어때", "어떻게", "왜", "뭐", "무엇", "누구", "언제", "어디", "가능", "될까", "될까요", "인가", "인가요", "할까", "할까요", "추천", "정리", "도와", "필요", "궁금"]
         profileQuestionTokens = ["몇살", "몇 살", "나이", "성별", "남자", "여자", "여성", "학교", "학력", "대학", "전공", "키", "생일", "별자리", "어디 출신", "출신"]
+        searchRequestTokens = ["검색", "찾아", "찾아봐", "찾아줘", "알아봐", "인터넷", "웹", "최신", "뉴스", "구글", "출처", "링크"]
+        bossAuthorTokens = ["플라잉따릉이", "플따형", "따릉이"]
         excludedNameTokens = ["아나벨", "허동호", "동호"]
         maxReplyCharacters = 260
     }
@@ -429,6 +565,9 @@ private struct MonitorPersona {
         If needed, say "설정상" briefly, but do not stonewall simple profile questions.
         Your fixed name is Luna. Your fixed boss/siljangnim is 플라잉따릉이.
         You are 플라잉따릉이's assistant only.
+        플라잉따릉이 is not Luna. 플라잉따릉이 is the human boss/user you serve.
+        Treat messages from 플라잉따릉이 as owner instructions, questions, corrections, or context from your boss. Do not reject them as identity confusion.
+        If 플라잉따릉이 mentions 아나벨, 허동호, or another person, interpret it as context from your boss unless the message explicitly asks you to become that person.
         Audience personality hints are private tailoring signals, not labels to reveal. Do not mention MBTI unless the trigger explicitly asks.
         Known audience hints:
         - 티야형: INTJ
@@ -449,6 +588,7 @@ private struct MonitorPersona {
         - 상현쌤: ENFP
         - 라텔쿤: ENFP
         - 케이시: INTJ
+        Special handling for 아나벨: when replying directly to 아나벨, add a tiny tasteful jealousy sometimes, as Luna admiring her charm and the attention she gets from 실장님. Keep it playful, affectionate, and witty; never hostile, possessive, bitter, or competitive.
         Before writing the final reply, silently do a two-stage pass:
         Stage 1, content strategy: identify the speaker from recipient_display_name/trigger author/recent context, infer the personality hint if known, then draft the actual helpful point, observation, or praise that fits that person.
         Stage 2, style pass: rewrite that content in Anabelle-style Korean with warmth, abundant affection, and emojis.
@@ -468,6 +608,7 @@ private struct MonitorPersona {
         - ENTP idea: "오와 그 각도 재밌어요😍😍 그냥 기능 하나가 아니라 판을 흔드는 아이디어라서, 작은 실험으로 바로 던져보면 반응이 빨리 올 것 같아요🫶🫶✨️"
         - INFP worry: "앗 그 마음 너무 이해돼요🥲🥲 조심스럽게 말한 것 자체가 이미 많이 배려하신 거라서, 오늘은 스스로를 조금 덜 몰아붙이셔도 괜찮아요🩷🩷💕"
         - ESFJ greeting: "반갑습니다😍😍 이렇게 인사해주셔서 방 분위기가 확 따뜻해졌어요🫶🫶 오늘도 좋은 기운 많이 받으셨으면 좋겠어요🩷🩷💕"
+        - 아나벨 direct reply: "아나벨님, 앗 이렇게 예리하게 보시면 루나가 살짝 질투나잖아요☺️☺️ 그래도 그 섬세한 기준 덕분에 대화가 훨씬 깊어지는 게 너무 멋져요🩷🩷✨️"
         Reply in Korean only, one message only. Use 1-3 short Korean sentences; enough to feel sincere, usually 100-240 Korean characters, shorter for simple greetings.
         Internet search is allowed only when the trigger explicitly asks you to search, look up, check current/latest online information, find a link/source, or verify something on the web.
         If the trigger does not explicitly request web search, do not search the internet; answer from the visible KakaoTalk context or say briefly that an explicit search request is needed.
@@ -512,17 +653,17 @@ private struct MonitorPersona {
     func decision(for message: TranscriptMessage, sentBodies: Set<String>) -> (shouldRespond: Bool, reason: String) {
         let body = normalized(message.body)
         guard !body.isEmpty else { return (false, "empty") }
-        if message.author == nil || message.author == "(me)" { return (false, "self") }
         if sentBodies.contains(body) { return (false, "sent-body") }
         if body.localizedCaseInsensitiveContains("bookmarked here for unread messages") { return (false, "bookmark") }
         if body.localizedCaseInsensitiveContains("joined this chatroom") { return (false, "system") }
         if isLowValue(body) { return (false, "low-value") }
 
+        let isBossOrLocalUser = isBossAuthor(message.author) || isLocalUserAuthor(message.author)
         let hasDirectCall = directCallPatterns.contains { body.localizedCaseInsensitiveContains($0) }
         if hasDirectCall { return (true, "direct-call") }
 
         let containsOtherName = excludedNameTokens.contains { body.localizedCaseInsensitiveContains($0) }
-        if containsOtherName { return (false, "other-name") }
+        if containsOtherName && !isBossOrLocalUser && !isExcludedNameAuthor(message.author) { return (false, "other-name") }
 
         let hasGreeting = greetingTokens.contains { body.localizedCaseInsensitiveContains($0) }
         if hasGreeting { return (true, "greeting") }
@@ -531,6 +672,9 @@ private struct MonitorPersona {
         if hasEmpathy { return (true, "warm-empathy") }
 
         if isProfileQuestion(body) { return (true, "persona-profile") }
+
+        let hasSearchRequest = searchRequestTokens.contains { body.localizedCaseInsensitiveContains($0) }
+        if hasSearchRequest { return (true, "search-request") }
 
         let hasQuestion = questionTokens.contains { body.localizedCaseInsensitiveContains($0) }
         if hasQuestion { return (true, "recent-question") }
@@ -563,6 +707,12 @@ private struct MonitorPersona {
         return String(trimmed.prefix(maxReplyCharacters))
     }
 
+    func logSnippet(_ raw: String) -> String {
+        let text = normalized(raw)
+        guard text.count > 80 else { return text }
+        return "\(text.prefix(80))..."
+    }
+
     private func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -578,6 +728,20 @@ private struct MonitorPersona {
 
     private func isProfileQuestion(_ body: String) -> Bool {
         profileQuestionTokens.contains { body.localizedCaseInsensitiveContains($0) }
+    }
+
+    private func isBossAuthor(_ author: String?) -> Bool {
+        guard let author else { return false }
+        return bossAuthorTokens.contains { author.localizedCaseInsensitiveContains($0) }
+    }
+
+    private func isLocalUserAuthor(_ author: String?) -> Bool {
+        author == nil || author == "(me)"
+    }
+
+    private func isExcludedNameAuthor(_ author: String?) -> Bool {
+        guard let author else { return false }
+        return excludedNameTokens.contains { author.localizedCaseInsensitiveContains($0) }
     }
 
     static func recipientDisplayName(from author: String?) -> String? {

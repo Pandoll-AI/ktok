@@ -56,6 +56,8 @@ ktok monitor "AgentKorea 운영진" --persona luna
 
 The `luna` persona replies to direct calls such as `루나` or `비서야`, general greetings, and warm-empathy cues. It does not treat `아나벨` or `허동호` as Luna. Monitor state is kept in the active account SQLite database under `~/.ktok/accounts/<alias>/history.sqlite`.
 
+If monitor read recovery fails repeatedly, it logs the failed phase and restarts itself with the same arguments. Use `--restart-after-read-failures 0` only when you want to disable that recovery behavior.
+
 ## Shared Workspace
 
 The storage root is `KTOK_HOME` when set, otherwise `~/.ktok`.
