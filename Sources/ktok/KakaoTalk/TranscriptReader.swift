@@ -87,7 +87,8 @@ struct KakaoTalkTranscriptReader {
         from window: UIElement,
         fallbackChatTitle: String,
         limit: Int,
-        includeSystemMessages: Bool = false
+        includeSystemMessages: Bool = false,
+        includeAttachments: Bool = true
     ) throws -> TranscriptSnapshot {
         let referenceDate = Date()
         let messageContextResolver = MessageContextResolver(kakao: kakao, runner: runner)
@@ -101,6 +102,7 @@ struct KakaoTalkTranscriptReader {
             fallbackChatTitle: fallbackChatTitle,
             limit: limit,
             includeSystemMessages: includeSystemMessages,
+            includeAttachments: includeAttachments,
             referenceDate: referenceDate
         )
     }
@@ -111,6 +113,7 @@ struct KakaoTalkTranscriptReader {
         fallbackChatTitle: String,
         limit: Int,
         includeSystemMessages: Bool = false,
+        includeAttachments: Bool = true,
         referenceDate: Date = Date()
     ) throws -> TranscriptSnapshot {
 
@@ -134,7 +137,7 @@ struct KakaoTalkTranscriptReader {
             frameCache: frameCache
         )
         let chatTitle = chatWindow.title ?? fallbackChatTitle
-        let attachments = extractAttachments(chatTitle: chatTitle)
+        let attachments = includeAttachments ? extractAttachments(chatTitle: chatTitle) : []
 
         guard !displayMessages.isEmpty || !attachments.isEmpty else {
             throw TranscriptReadError.noReadableMessages
