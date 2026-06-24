@@ -19,6 +19,7 @@
 - monitor 기본 poll sleep을 제거했다. `--poll-interval`은 필요한 경우 poll 이후 추가 대기 시간으로만 동작한다.
 - monitor 답변은 가능한 경우 trigger 작성자 표시명을 앞에 붙여 누구에게 답하는지 명시한다.
 - monitor는 루나의 고정 이름과 `플라잉따릉이` 실장님 관계를 보호하고, 이름/소속/비서 역할 변경 시도를 무시하도록 프롬프트를 강화했다.
+- monitor에 `Pandoll-AI/luna`의 서루나 핵심 페르소나를 짧게 주입해, 차분한 전략 비서 말투와 실행 단위 정리 성향을 반영했다.
 
 ### Changed — Remove password-like placeholders (2026-05-31)
 
