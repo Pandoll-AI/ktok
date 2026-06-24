@@ -17,6 +17,7 @@
 - monitor는 기본 60초 heartbeat를 출력해 감시 루프가 살아 있는지 확인할 수 있다.
 - 큰 단체방에서 poll이 막히지 않도록 monitor 기본 snapshot은 최근 20개 메시지만 본다.
 - monitor 기본 poll sleep을 제거했다. `--poll-interval`은 필요한 경우 poll 이후 추가 대기 시간으로만 동작한다.
+- monitor 답변은 가능한 경우 trigger 작성자 표시명을 앞에 붙여 누구에게 답하는지 명시한다.
 
 ### Changed — Remove password-like placeholders (2026-05-31)
 
