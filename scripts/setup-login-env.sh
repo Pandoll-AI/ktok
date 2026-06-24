@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/setup-login-env.sh [--alias <alias>] [--env-file <path>] [--login]
+Usage: scripts/setup-login-env.sh [--alias <alias>] [--env-file <path>] [--keychain <path>] [--ktok-bin <path>] [--login]
 
 Interactively configure ktok login credentials.
 
@@ -12,11 +12,14 @@ Default behavior:
   - Saves the password in macOS Keychain:
       service: ktok
       account: login:<alias>
+  - Writes KTOK_KEYCHAIN_PATH so ktok reads the same Keychain file
   - Removes KTOK_LOGIN_<ALIAS>_PASSWORD from the env file if present
 
 Options:
   --alias <alias>     Default alias to edit. Defaults to work.
   --env-file <path>   Env file to update. Defaults to ~/.ktok/config/.env.
+  --keychain <path>   Keychain file. Defaults to ~/Library/Keychains/login.keychain-db.
+  --ktok-bin <path>   ktok binary to trust for Keychain access. Defaults to command -v ktok.
   --login             Run "ktok login <alias>" after saving.
   -h, --help          Show this help.
 EOF
@@ -25,6 +28,9 @@ EOF
 env_file="${KTOK_LOGIN_ENV_FILE:-${KTOK_ENV_FILE:-$HOME/.ktok/config/.env}}"
 alias_input="work"
 run_login=false
+keychain_path="${KTOK_KEYCHAIN_PATH:-$HOME/Library/Keychains/login.keychain-db}"
+ktok_bin="${KTOK_BIN:-}"
+ktok_bin_resolved=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +42,16 @@ while [[ $# -gt 0 ]]; do
     --env-file)
       [[ $# -ge 2 ]] || { echo "Missing value for --env-file" >&2; exit 2; }
       env_file="$2"
+      shift 2
+      ;;
+    --keychain)
+      [[ $# -ge 2 ]] || { echo "Missing value for --keychain" >&2; exit 2; }
+      keychain_path="$2"
+      shift 2
+      ;;
+    --ktok-bin)
+      [[ $# -ge 2 ]] || { echo "Missing value for --ktok-bin" >&2; exit 2; }
+      ktok_bin="$2"
       shift 2
       ;;
     --login)
@@ -56,6 +72,17 @@ done
 
 if [[ ! -t 0 ]]; then
   echo "This script is interactive. Run it from a terminal so the password prompt can hide input." >&2
+  exit 1
+fi
+
+if [[ "$(id -u)" -eq 0 ]]; then
+  cat >&2 <<'EOF'
+Do not run this script with sudo.
+
+sudo stores files and Keychain items as root, which makes ktok unable to read
+them as your normal macOS user. Fix ownership first if a previous sudo run
+created root-owned files.
+EOF
   exit 1
 fi
 
@@ -82,6 +109,25 @@ normalize_alias() {
 
 to_lower() {
   tr '[:upper:]' '[:lower:]' <<<"$1"
+}
+
+resolve_existing_path() {
+  local path="$1"
+  local dir base target
+
+  while [[ -L "$path" ]]; do
+    dir="$(cd "$(dirname "$path")" && pwd -P)"
+    base="$(basename "$path")"
+    target="$(readlink "$dir/$base")"
+    case "$target" in
+      /*) path="$target" ;;
+      *) path="$dir/$target" ;;
+    esac
+  done
+
+  dir="$(cd "$(dirname "$path")" && pwd -P)"
+  base="$(basename "$path")"
+  printf '%s/%s' "$dir" "$base"
 }
 
 prompt() {
@@ -167,18 +213,116 @@ dotenv_quote() {
 
 keychain_has_password() {
   local alias_lower="$1"
-  security find-generic-password -s ktok -a "login:${alias_lower}" -w >/dev/null 2>&1
+  security find-generic-password -s ktok -a "login:${alias_lower}" -w "$keychain_path" >/dev/null 2>&1
 }
 
 save_password_to_keychain() {
   local alias_lower="$1"
   local password="$2"
-  security add-generic-password -U -s ktok -a "login:${alias_lower}" -w "$password" >/dev/null
+  local output status
+  local args
+
+  security delete-generic-password -s ktok -a "login:${alias_lower}" "$keychain_path" >/dev/null 2>&1 || true
+
+  args=(add-generic-password -s ktok -a "login:${alias_lower}")
+  if [[ -n "$ktok_bin" ]]; then
+    args+=(-T "$ktok_bin")
+  fi
+  if [[ -n "$ktok_bin_resolved" && "$ktok_bin_resolved" != "$ktok_bin" ]]; then
+    args+=(-T "$ktok_bin_resolved")
+  fi
+  args+=(-T /usr/bin/security -w "$password" "$keychain_path")
+
+  if output=$(security "${args[@]}" 2>&1 >/dev/null); then
+    return 0
+  fi
+
+  status=$?
+  if grep -q "User interaction is not allowed" <<<"$output"; then
+    unlock_keychain
+    security "${args[@]}" >/dev/null
+    return
+  fi
+
+  printf '%s\n' "$output" >&2
+  return "$status"
 }
 
 if ! command -v security >/dev/null 2>&1; then
   echo "macOS 'security' command not found. Cannot save ktok password to Keychain." >&2
   exit 1
+fi
+
+keychain_path="${keychain_path/#\~/$HOME}"
+if [[ ! -f "$keychain_path" ]]; then
+  cat >&2 <<EOF
+User login keychain not found:
+  $keychain_path
+
+Create or unlock your login keychain in Keychain Access, or pass --keychain <path>.
+EOF
+  exit 1
+fi
+
+if [[ ! -w "$keychain_path" ]]; then
+  cat >&2 <<EOF
+User login keychain is not writable:
+  $keychain_path
+
+Do not use sudo. Check ownership/permissions in ~/Library/Keychains.
+EOF
+  exit 1
+fi
+
+if [[ -z "$ktok_bin" ]]; then
+  ktok_bin="$(command -v ktok || true)"
+fi
+
+if [[ -n "$ktok_bin" ]]; then
+  ktok_bin="${ktok_bin/#\~/$HOME}"
+  if [[ ! -x "$ktok_bin" ]]; then
+    cat >&2 <<EOF
+ktok binary is not executable:
+  $ktok_bin
+
+Install ktok globally first, or pass --ktok-bin <path>.
+EOF
+    exit 1
+  fi
+  ktok_bin_resolved="$(resolve_existing_path "$ktok_bin")"
+  if [[ ! -x "$ktok_bin_resolved" ]]; then
+    cat >&2 <<EOF
+Resolved ktok binary is not executable:
+  $ktok_bin_resolved
+
+Install ktok globally first, or pass --ktok-bin <path>.
+EOF
+    exit 1
+  fi
+else
+  cat >&2 <<'EOF'
+ktok binary was not found in PATH.
+
+Install ktok globally first, or pass --ktok-bin <path>. The script needs this
+path so Keychain can allow ktok to read the saved password without a prompt.
+EOF
+  exit 1
+fi
+
+unlock_keychain() {
+  cat >&2 <<EOF
+The login keychain is locked or cannot prompt from this session.
+Unlock it now with your macOS login/keychain password.
+
+Keychain:
+  $keychain_path
+
+EOF
+  security unlock-keychain "$keychain_path"
+}
+
+if ! security show-keychain-info "$keychain_path" >/dev/null 2>&1; then
+  unlock_keychain
 fi
 
 prompt alias_input "Login alias" "$alias_input"
@@ -202,7 +346,7 @@ prompt_yes_no keep_logged_in "Keep KakaoTalk logged in" "y"
 
 replace_password="true"
 if keychain_has_password "$alias_lower"; then
-  prompt_yes_no replace_password "Keychain already has password for login:${alias_lower}. Replace it" "n"
+  prompt_yes_no replace_password "Keychain already has password for login:${alias_lower}. Replace it so ktok is trusted" "y"
 fi
 
 if [[ "$replace_password" == "true" ]]; then
@@ -221,6 +365,7 @@ id_key="KTOK_LOGIN_${alias_normalized}_ID"
 password_key="KTOK_LOGIN_${alias_normalized}_PASSWORD"
 profile_key="KTOK_LOGIN_${alias_normalized}_PROFILE_NAME"
 keep_key="KTOK_LOGIN_${alias_normalized}_KEEP_LOGGED_IN"
+keychain_key="KTOK_KEYCHAIN_PATH"
 
 tmp_file="$(mktemp "${TMPDIR:-/tmp}/ktok-env.XXXXXX")"
 cleanup() {
@@ -229,12 +374,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-remove_re="^(export[[:space:]]+)?(${id_key}|${password_key}|${profile_key}|${keep_key})="
+remove_re="^(export[[:space:]]+)?(${id_key}|${password_key}|${profile_key}|${keep_key}|${keychain_key})="
 grep -Ev "$remove_re" "$env_file" > "$tmp_file" || true
 
 {
   printf '\n'
   printf '# ktok login alias: %s\n' "$alias_lower"
+  printf '%s=%s\n' "$keychain_key" "$(dotenv_quote "$keychain_path")"
   printf '%s=%s\n' "$id_key" "$(dotenv_quote "$account_id")"
   if [[ -n "$profile_name" ]]; then
     printf '%s=%s\n' "$profile_key" "$(dotenv_quote "$profile_name")"
@@ -255,7 +401,12 @@ Alias:
   $alias_lower
 
 Password:
-  macOS Keychain service 'ktok', account 'login:${alias_lower}'
+  macOS Keychain:
+    file: $keychain_path
+    service: ktok
+    account: login:${alias_lower}
+    trusted app: $ktok_bin
+    trusted app resolved: $ktok_bin_resolved
 
 Next:
   ktok login ${alias_lower}

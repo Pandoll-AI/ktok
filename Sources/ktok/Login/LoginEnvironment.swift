@@ -6,6 +6,7 @@ struct LoginCredentials {
     let password: String
     let keepLoggedIn: Bool?
     let profileName: String?
+    let keychainPath: String?
     let sourcePath: String?
 }
 
@@ -52,6 +53,7 @@ struct LoginEnvironment {
         let keepKey = "KTOK_LOGIN_\(normalized)_KEEP_LOGGED_IN"
         let profileNameKey = "KTOK_LOGIN_\(normalized)_PROFILE_NAME"
         let alias = normalized.lowercased()
+        let keychainPath = values["KTOK_KEYCHAIN_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
 
         guard
             let id = values[idKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -66,7 +68,7 @@ struct LoginEnvironment {
         }
 
         let envPassword = values[passwordKey]?.nilIfEmpty
-        let password = envPassword ?? SecretStore.readPassword(alias: alias) ?? ""
+        let password = envPassword ?? SecretStore.readPassword(alias: alias, keychainPath: keychainPath) ?? ""
         guard !password.isEmpty else {
             throw LoginEnvironmentError.aliasNotFound(
                 alias: rawAlias,
@@ -82,6 +84,7 @@ struct LoginEnvironment {
             password: password,
             keepLoggedIn: values[keepKey].flatMap(Self.parseBool),
             profileName: values[profileNameKey]?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            keychainPath: keychainPath,
             sourcePath: sourcePath
         )
     }
