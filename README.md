@@ -1,5 +1,7 @@
 # ktok
 
+![ktok hero](assets/hero.png)
+
 `ktok` is a KakaoTalk macOS automation CLI, MCP server, and shared local workspace owner.
 
 `ktok` remains the KakaoTalk I/O layer: it observes messages/attachments, sends messages/files, downloads attachments, and imports raw history. It also owns the canonical local data workspace at `KTOK_HOME` or `~/.ktok` so other local services can store and read shared KakaoTalk-related inputs, events, and files without a language SDK.
