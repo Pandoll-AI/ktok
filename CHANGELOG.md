@@ -25,6 +25,16 @@
 - monitor는 초기 read/resolve 실패와 recovery 실패를 JSONL 이벤트로 남기며, 연속 recovery 실패가 기본 6회 누적되면 같은 argv로 자기 자신을 재시작한다.
 - `luna` persona는 `아나벨`에게 직접 답할 때 장난스럽고 센스 있는 약간의 질투를 섞을 수 있다.
 
+### Fixed — Login setup ownership and Keychain target (2026-05-31)
+
+- `scripts/setup-login-env.sh`가 `sudo` 실행을 거부하도록 변경했다. `sudo`로 실행하면 `~/.ktok/config/.env`가 root-owned로 생성되어 일반 `ktok login`이 읽지 못하는 문제를 방지한다.
+- 설정 스크립트가 macOS default keychain에 의존하지 않고 `~/Library/Keychains/login.keychain-db`에 password를 저장하도록 변경했다.
+- login keychain이 잠겨 있어 `security: User interaction is not allowed`가 나는 경우, 설정 스크립트가 먼저 `security unlock-keychain`을 실행해 unlock을 요구하고 저장을 재시도하도록 변경했다.
+- 설정 스크립트가 password 저장 시 `ktok` 바이너리, symlink resolved 바이너리, `/usr/bin/security`를 Keychain trusted app으로 지정해, 저장 후 `ktok`이 비대화형으로 password를 읽지 못하는 문제를 방지한다.
+- 기존 Keychain 항목을 교체할 때는 delete 후 recreate하여 기존 접근 제어 목록이 남지 않도록 했다.
+- `SecretStore`도 사용자 login keychain을 우선 검색/저장하도록 변경해, 사용자의 default keychain/search list가 System keychain으로 잘못 잡힌 경우에도 ktok이 같은 항목을 읽을 수 있게 했다.
+- `setup-login-env.sh`가 `KTOK_KEYCHAIN_PATH`를 `.env`에 기록하고, `SecretStore`가 이 값을 따라가도록 맞춰 `--keychain <path>` 사용 시 저장/조회 경로가 어긋나지 않게 했다.
+
 ### Changed — Remove password-like placeholders (2026-05-31)
 
 - `ktok login --help`의 `.env` 예시에서 password-looking placeholder를 제거했다. 비밀번호는 Keychain 또는 platform secret backend에 저장하도록 안내한다.

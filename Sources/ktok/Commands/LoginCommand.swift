@@ -56,7 +56,7 @@ struct LoginCommand: ParsableCommand {
             if status.isRunning, !status.isLoginWindowVisible, credentials.profileName != nil {
                 let profileName = detector.detectCurrentProfileName(timeoutSec: 1.0, restoreChatsTab: true)
                 if AccountProfileDetector.profileName(credentials.profileName, matches: profileName) {
-                    SecretStore.savePassword(credentials.password, alias: credentials.alias)
+                    SecretStore.savePassword(credentials.password, alias: credentials.alias, keychainPath: credentials.keychainPath)
                     try LoginAccountState.save(credentials: credentials, profileName: profileName)
                     print("Already logged in as '\(credentials.alias)' via profile '\(profileName ?? "")' (\(maskedAccountID(credentials.accountID))).")
                     return
@@ -77,7 +77,7 @@ struct LoginCommand: ParsableCommand {
 
             print("Logging in as alias '\(credentials.alias)' (\(maskedAccountID(credentials.accountID)))...")
             try navigator.login(credentials: credentials, timeoutSec: timeout)
-            SecretStore.savePassword(credentials.password, alias: credentials.alias)
+            SecretStore.savePassword(credentials.password, alias: credentials.alias, keychainPath: credentials.keychainPath)
             try LoginAccountState.save(credentials: credentials)
             print("Logged in as '\(credentials.alias)'.")
         } catch {
@@ -134,7 +134,7 @@ struct AssumeCommand: ParsableCommand {
         do {
             let environment = try LoginEnvironment.load(path: envFile)
             let credentials = try environment.credentials(alias: alias)
-            SecretStore.savePassword(credentials.password, alias: credentials.alias)
+            SecretStore.savePassword(credentials.password, alias: credentials.alias, keychainPath: credentials.keychainPath)
             try LoginAccountState.save(credentials: credentials)
             print("Recorded current KakaoTalk account as '\(credentials.alias)' (\(maskedAccountID(credentials.accountID))).")
         } catch {
@@ -174,7 +174,7 @@ struct WhoamiCommand: ParsableCommand {
                         AccountProfileDetector.profileName(credentials.profileName, matches: detectedProfileName)
                     }
                     if let detectedCredentials {
-                        SecretStore.savePassword(detectedCredentials.password, alias: detectedCredentials.alias)
+                        SecretStore.savePassword(detectedCredentials.password, alias: detectedCredentials.alias, keychainPath: detectedCredentials.keychainPath)
                         try? LoginAccountState.save(credentials: detectedCredentials, profileName: detectedProfileName)
                     }
                 }
