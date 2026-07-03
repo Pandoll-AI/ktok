@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added — `ktok config export/import` (개인화 설정 다른 맥으로 이전) (2026-07-04)
+
+- `ktok config export -o <archive.tgz>` : 이식 가능한 개인화 설정만 `.tgz` 로 묶는다 — `persona/`, `channel/channel.sqlite`(허용목록·chat map), `chat-id-map.json`/`chat-registry.json`, `state/current-account.json`.
+- **머신 종속·비밀은 자동 제외**: AX 경로 캐시(`cache/`, `ax-cache.json` — 그 맥의 KakaoTalk 레이아웃에 묶여 자동 재생성)와 `logs/` 는 담지 않는다. 로그인 비밀번호는 파일이 아니라 macOS Keychain 에 있어 아카이브에 포함되지 않는다(대상 맥에서 `ktok login` 재실행 안내).
+- `ktok config import <archive.tgz>` : `KTOK_HOME`(`~/.ktok`)로 복원. `--dry-run` 으로 내용만 미리보기. 복원 후 다음 단계(login/persona validate/monitor list)를 안내한다.
+- 옵션: `--with-history`(계정 히스토리 `accounts/` 포함, 용량 큼), `--with-env`(`config/.env` 로그인 설정 포함, 비밀번호 제외). `tar` 기반, `--json` 지원.
+
 ### Added — 봇 모드 `ktok bot` + 페르소나 외부화/공개 스크럽 (2026-07-03)
 
 **봇 모드**
