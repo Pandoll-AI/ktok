@@ -195,6 +195,29 @@ ktok persona show --name luna     # print resolved config
 
 See `docs/PERSONA_SETUP.md` for the schema and an LLM-assisted way to write the `system_prompt`.
 
+## config
+
+Move the portable personalized config (persona, channel allowlist, chat maps) to another Mac. Machine-specific AX cache and logs are excluded; the login password stays in the macOS Keychain (re-run `ktok login` on the target).
+
+```bash
+# On the source Mac:
+ktok config export -o ktok-config.tgz          # persona + allowlist + maps
+ktok config export -o full.tgz --with-history --with-env
+
+# Copy the archive over (AirDrop/scp), then on the target Mac:
+ktok config import ktok-config.tgz             # restores into ~/.ktok
+ktok config import ktok-config.tgz --dry-run   # list contents only
+ktok login <alias>                             # restore the password (Keychain)
+```
+
+| Option | Meaning |
+| --- | --- |
+| `-o, --output <path>` | Export archive path (default `ktok-config.tgz`). |
+| `--with-history` | Include `accounts/` message history (can be large). |
+| `--with-env` | Include `config/.env` login settings (no password). |
+| `--dry-run` (import) | List archive contents without extracting. |
+| `--json` | Emit JSON. |
+
 ## send / send-image / send-file
 
 ```bash
