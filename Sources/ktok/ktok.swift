@@ -46,6 +46,8 @@ struct Ktok: ParsableCommand {
             WatchCommand.self,
             ChannelCommand.self,
             MonitorCommand.self,
+            BotCommand.self,
+            PersonaCommand.self,
             StorageCommand.self,
             EventsCommand.self,
             InputsCommand.self,

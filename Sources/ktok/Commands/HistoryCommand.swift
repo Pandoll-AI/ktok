@@ -13,7 +13,7 @@ struct HistoryCommand: ParsableCommand {
             Examples:
               ktok history "채팅방"
               ktok history "채팅방" --since 2026-04-01 --kind file
-              ktok history "채팅방" --author "Emergency Lee" --query "회의"
+              ktok history "채팅방" --author "홍길동" --query "회의"
               ktok history --attachments --kind file --since 2026-04-10 --json
             """
     )

@@ -10,3 +10,11 @@ DerivedData/
 *.swp
 *.swo
 .idea/
+
+# Private, user-owned config — never commit real persona identity, names, or room titles.
+/persona/
+persona.local.json
+persona.*.local.json
+*.local.json
+config.local.*
+/.ktok/

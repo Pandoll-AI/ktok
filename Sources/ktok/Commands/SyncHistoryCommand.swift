@@ -21,7 +21,7 @@ struct SyncHistoryCommand: ParsableCommand {
 
             Examples:
               ktok sync-history "채팅방"
-              ktok sync-history "Emergency Lee" --my-kakao-id "Emergency Lee" --json
+              ktok sync-history "채팅방" --my-kakao-id "내이름" --json
               ktok sync-history "팀방" --save-dir ~/.ktok/accounts/work/exports --trace-ax
             """
     )

@@ -137,7 +137,7 @@ struct KakaoTalkTranscriptReader {
             frameCache: frameCache
         )
         let chatTitle = chatWindow.title ?? fallbackChatTitle
-        let attachments = includeAttachments ? extractAttachments(chatTitle: chatTitle) : []
+        let attachments = includeAttachments ? extractAttachments(window: chatWindow, chatTitle: chatTitle) : []
 
         guard !displayMessages.isEmpty || !attachments.isEmpty else {
             throw TranscriptReadError.noReadableMessages
@@ -337,8 +337,8 @@ struct KakaoTalkTranscriptReader {
         return Array(deduplicateMessagesPreservingOrder(messages).suffix(limit))
     }
 
-    private func extractAttachments(chatTitle: String) -> [TranscriptAttachment] {
-        let scan = AttachmentScanner.scanAll(chat: chatTitle)
+    private func extractAttachments(window: UIElement, chatTitle: String) -> [TranscriptAttachment] {
+        let scan = AttachmentScanner.scanAll(window: window)
         if let axError = scan.axError {
             runner.log("read: attachment scan failed \(axError)")
             return []

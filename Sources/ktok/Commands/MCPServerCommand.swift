@@ -267,6 +267,11 @@ private final class KtokMCPServer {
                             "default": traceDefault,
                             "description": "Include AX tracing logs",
                         ],
+                        "attachments": [
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Scan transcript attachments (files/images). Off by default because it runs a slow AppleScript pass; enable only when you need attachment metadata.",
+                        ],
                     ],
                     "required": ["chat"],
                     "additionalProperties": false,
@@ -675,11 +680,13 @@ private final class KtokMCPServer {
         let deepRecovery = boolValue(arguments["deep_recovery"], defaultValue: deepRecoveryDefault)
         let keepWindow = boolValue(arguments["keep_window"], defaultValue: false)
         let traceAX = boolValue(arguments["trace_ax"], defaultValue: traceDefault)
+        let scanAttachments = boolValue(arguments["attachments"], defaultValue: false)
 
         var command = ["read", chat, "--json", "--limit", String(boundedLimit)]
         if deepRecovery { command.append("--deep-recovery") }
         if keepWindow { command.append("--keep-window") }
         if traceAX { command.append("--trace-ax") }
+        command.append(scanAttachments ? "--attachments" : "--no-attachments")
 
         // ktok_read can hit cold KakaoTalk + slow AX path resolution on first
         // open of a chat. Python MCP uses 20/40 here (python-wrapper/ktok-mcp.py

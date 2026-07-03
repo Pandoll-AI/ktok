@@ -164,8 +164,8 @@ struct DownloadFileCommand: ParsableCommand {
 
         for attempt in 0...clampedMaxScroll {
             let scan = hasRequestedAttachmentID
-                ? AttachmentScanner.scanAll(chat: windowTitle)
-                : AttachmentScanner.scan(chat: windowTitle, filename: filename)
+                ? AttachmentScanner.scanAll(window: resolution.window)
+                : AttachmentScanner.scan(window: resolution.window, filename: filename)
             if let err = scan.axError {
                 lastAXError = err
             }

@@ -12,7 +12,7 @@ Tech stack: Swift Package executable, ArgumentParser, macOS Accessibility APIs, 
 
 ## Safety and operating constraints
 
-- Test target is only the user's self-chat: exact title `Emergency Lee`, chat_id `chat_134aa6b90437`.
+- Test target is only the user's self-chat: exact title `<self-chat>`, chat_id `<chat_id>`.
 - Do not test by sending messages to third parties.
 - Use exact title matching only. Duplicate titles require chat_id disambiguation.
 - The channel daemon detects and enqueues only; no automatic external replies.
@@ -86,8 +86,8 @@ Subcommands:
 Verification:
 - `ktok channel --help`
 - `ktok channel refresh-chats --force --json`
-- `ktok channel monitor add --title "Emergency Lee" --mode self_control --json`
-- `ktok channel poll-once --title "Emergency Lee" --enqueue-mine --json`
+- `ktok channel monitor add --title "<self-chat>" --mode self_control --json`
+- `ktok channel poll-once --title "<self-chat>" --enqueue-mine --json`
 
 ### Task 3: Prepare future Hermes integration
 
@@ -114,7 +114,7 @@ Implemented in this iteration:
 - `ktok channel queue claim --worker luna-kakao [--limit N] [--lease-seconds N] [--json]`
 - `ktok channel queue complete ID [--worker luna-kakao] [--json]`
 - `ktok channel queue fail ID [--worker luna-kakao] [--retry] [--delay-seconds N] [--json]`
-- `ktok channel queue add-test --title "Emergency Lee" --body "..." --json`
+- `ktok channel queue add-test --title "<self-chat>" --body "..." --json`
 
 `add-test` is intentionally local-only: it inserts a synthetic queue row into SQLite without sending to or reading from KakaoTalk. It exists so the queue lifecycle can be verified safely against the self-chat scope.
 

@@ -486,12 +486,11 @@ final class ChannelStore {
                 exact[chat.title] = chat.chatID
             }
         }
-        return [
+        var object: [String: Any] = [
             "source": "ktok channel refresh-chats",
             "updated_at": updatedAt,
             "ttl_seconds": Self.defaultChatMapTTLSeconds,
             "matching_policy": "Use exact title match first; if duplicate titles exist, require disambiguation; prefer chat_id for sending when known.",
-            "self_chat": ["title": "Emergency Lee", "chat_id": exact["Emergency Lee"] as Any],
             "indexes": [
                 "exact_title_to_chat_id": exact,
                 "duplicate_title_to_chat_ids": duplicates,
@@ -505,6 +504,13 @@ final class ChannelStore {
                 "priority": $0.priority,
             ] },
         ]
+        // The self-chat title is user-specific and never hardcoded. Set it via
+        // KTOK_SELF_CHAT to include a `self_chat` index entry.
+        if let selfTitle = ProcessInfo.processInfo.environment["KTOK_SELF_CHAT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !selfTitle.isEmpty {
+            object["self_chat"] = ["title": selfTitle, "chat_id": exact[selfTitle] as Any]
+        }
+        return object
     }
 
     func writeChatMapJSON(to path: URL? = nil) throws -> URL {

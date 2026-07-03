@@ -6,24 +6,85 @@
 
 ## [Unreleased]
 
-### Added — Fixed-room persona monitor (2026-06-24)
+### Added — 봇 모드 `ktok bot` + 페르소나 외부화/공개 스크럽 (2026-07-03)
+
+**봇 모드**
+
+- `ktok bot run` 추가: 허용목록(`ktok channel monitor add`) 방들을 상시 감시해 새 메시지에 페르소나로 응답하는 백그라운드 챗봇. 응답은 **무포커스 전송**(`MessageSender.sendFocusFree`)이라 사용자의 앞 앱을 방해하지 않는다.
+- LLM은 `codex`(기본 `gpt-5.4-mini`, **medium** effort)를 서브프로세스로 호출(`CodexReplyGenerator`), 실패 시 페르소나 fallback.
+- `--trigger-mode` 로 응답 조건을 모드로 선택: `persona`(기본, decision() 게이팅) / `mention`(직접호출만) / `all`(모든 새 메시지) / `off`(감지만). `mention`/`all` 은 자기 발화·빈 메시지 가드 포함.
+- 방별 상태: `WatchPollingState`(suffix-overlap 신규 검출) + 영속 seen/reply(`MonitorStateStore`, monitor_id=account|room|persona). 방을 처음 볼 때 backlog 억제.
+- 안전: **허용목록 밖 방은 절대 자동응답 안 함**. 봇 운영 preamble(허용목록만·자기 메시지 무응답·불확실 시 `SKIP`)을 페르소나 지시문 앞에 결합.
+- **카페인 모드**(기본 ON): 봇이 도는 동안 맥이 유휴로 잠들지 않게 네이티브 전원 assertion(`ProcessInfo.beginActivity(.idleSystemSleepDisabled)`)을 유지한다(`caffeinate` 서브프로세스 없이). `--no-caffeine` 로 해제.
+- `ktok bot install-daemon` 로 LaunchAgent 상시화 가능(라벨 `com.ktok.bot`, 바이너리 경로 자동 도출). 개발 환경에선 `ktok bot run &` 로 그냥 백그라운드 실행해도 된다.
+
+**페르소나 외부화 (공개 레포에서 개인정보 제거)**
+
+- 기존 `MonitorCommand` 에 하드코딩돼 있던 페르소나(정체성·프로필·owner/실명·MBTI·예시)를 **외부 설정 파일 `~/.ktok/persona/<name>.json`** 으로 전면 이동(`PersonaConfig`/`Persona`). 소스에는 실명 0의 **중립 기본 페르소나**만 남는다. `MonitorCommand` 에서 약 380줄(개인정보 포함) 제거.
+- `ktok persona init|show|validate|path` CLI 추가. 커밋되는 중립 예시 `persona.example.json` 와 작성 설명서 `docs/PERSONA_SETUP.md`(LLM 이 채우도록 하는 프롬프트 가이드 포함) 제공. `.gitignore` 에 개인 설정 패턴 추가.
+- 공개 스크럽: self-chat 하드코딩·실제 방/사람 이름·개발자 홈 경로·개인 LaunchAgent 라벨을 소스·문서에서 전면 제거하고 placeholder/설정/자동도출로 대체. self-chat 은 `KTOK_SELF_CHAT` env 로만 노출. install-daemon 바이너리 경로는 실행 파일에서 자동 도출.
+- `CodexReplyGenerator` 의 하드코딩 작업디렉터리를 제거하고 `KTOK_HOME`/`KTOK_CODEX_WORKDIR` 기반으로 변경.
+
+**공유 컴포넌트 추출**
+
+- `CodexReplyGenerator`, `Persona`, 무포커스 전송(`MessageSender`)을 재사용 파일로 추출해 `monitor`/`send`/`bot` 이 공유. `send` 의 focus-free 로직이 `MessageSender.sendFocusFree` 로 단일화됐다.
+
+**버그 수정 (봇 다중 방 실측 중 발견)**
+
+- **배경에서 방 열기 실패**: 목록에 보이는 방 행을 AXSelected 후 여는 Enter 가 "KakaoTalk 이 frontmost 아님" 으로 스킵돼, 배경(봇) 컨텍스트에서 방이 안 열렸다(`SEARCH_MISS: Search field not found`). 행-열기 confirm Enter 를 **`CGEvent.postToPid`**(배경-안전)로 전달하도록 수정(`ChatWindowResolver`, `AXActionRunner.pressEnterKey(toPID:)`). read/send/bot 공통 개선.
+- **다중 방 창 혼동(수취인 안전)**: 여러 채팅창이 열린 상태에서 방 B 를 읽을 때 읽기/입력 resolver 의 "현재 focus 창" fast-path 때문에 방 A(현재 focus)의 내용이 반환될 수 있었다. 봇이 읽기 전 **대상 창이 focus 가 아닐 때만 AXRaise** 로 스코프를 교정하도록 수정(단일 방 정상 상태에선 raise 없이 focus-free 유지).
+
+### Changed — 무포커스 전송(포커스 안 뺏는 send) (2026-07-03)
+
+- **문제**: 전송 시 KakaoTalk을 항상 맨 앞으로 가져와 사용자의 작업 창을 뺏었다. 원인은 전송 트리거인 Enter를 전역 HID 탭(`CGEvent.post(tap: .cghidEventTap)`)으로 눌러 "맨 앞 앱"에만 전달됐기 때문. (읽기는 순수 AX라 원래 포커스를 안 뺏음 — 실측으로 확인.)
+- 전송 기본 경로를 **무포커스(focus-free)**로 전환했다: 해결된 입력 요소를 AX로 포커스한 뒤, 메시지 타이핑과 Enter를 **`CGEvent.postToPid`로 KakaoTalk 프로세스에 직접 전달**한다. 앱을 앞으로 가져오지 않으므로 사용자의 현재 앱이 유지된다. (`AXActionRunner.pressKey/typeText`에 `toPID` 경로 추가, `KakaoTalkApp.processIdentifier` 노출.)
+- 배경 창에서는 `AXValue` 쓰기가 반영되지 않지만 **posted key event는 포커스된 first responder에 도달**하고, 배경 AX **읽기**는 (0.25s messaging cap보다 느릴 뿐) 동작한다는 점을 이용했다. 그래서 키 이벤트로 입력하고, 검증 타임아웃을 1.0s로 늘렸다.
+- 안전장치: 타이핑 후 **입력 내용이 전체 메시지와 일치**하는지, Enter 후 **그 입력 요소가 비워졌는지**를 검증한다. 엉뚱한 창/필드에 포커스가 갔다면 우리 입력 요소가 비워지지 않아 검증이 실패하고, 자동으로 포그라운드 경로로 폴백한다(수취인·내용 안전 유지).
+- 검증 실패(예: 미래 빌드가 배경 key delivery를 막는 경우)나 `KTOK_FOREGROUND_SEND=1` 설정 시, 기존 포그라운드 경로(activate + 전역 HID)로 폴백하고 **전송 후 이전 앱으로 포커스를 복귀**시킨다.
+- `closeWindow`를 배경 우선으로 재정렬했다: `AXClose`/닫기 버튼(배경 창에도 동작)을 먼저 시도하고, Cmd+W 키보드 폴백에서만 `activate`한다. 전송 후 창을 닫을 때 KakaoTalk이 앞으로 튀어나오지 않게 했다.
+- 실측: 창이 이미 열린(웜) 전송은 다른 앱(Finder)이 앞에 있어도 **포커스를 전혀 뺏지 않고** 약 0.5s에 완료. 대화창을 **새로 여는** 콜드 전송은 KakaoTalk이 창을 열며 스스로 앞으로 나오는 자체 동작이 남아 잠깐 포커스가 감(일회성). monitor/반복 전송처럼 창이 유지되는 경우는 완전 무포커스.
+
+### Changed — 채팅방 인식 낙관적 fast-path 도입 (2026-07-03)
+
+- **문제**: `send`/`read`는 대상 방이 이미 목록에 보여도 항상 `ChatWindowResolver.resolve()`가 KakaoTalk 검색창을 조작(검색필드 포커스 → 지우기 → 이름 타이핑 → 0.6s 대기 → 결과 매칭)했다. 실측상 `read "<self-chat>"`가 검색창 플로우로 약 9s를 쓰고, 검색 결과 후보가 2개면 `refusing ambiguous exact search candidates`로 즉시 SEARCH_MISS 실패했다. "먼저 시도하고 실패 시 복구"하는 낙관적 경로가 없었다.
+- `ChatWindowResolver.resolve(query:)`를 인식 래더로 재구성했다: ① 이미 열린 대화창(exact title) → ② **보이는 채팅목록 행 직접 열기**(`openVisibleExactChatRow`, `ktok chats`와 동일한 검증된 `ChatListScanner` 재사용) → ③ 친구 탭이 활성인 경우 대비해 `chatrooms` 탭 활성화 후 1회 재시도 → ④ 목록에 없어 스크롤/검색이 필요한 방만 기존 검색창 플로우(`openChatViaSearch`).
+- 검증된 목록 스캔으로 행을 눌러 열기 때문에 검색창 타이핑·0.6s 대기·ambiguity 거부를 건너뛴다. `read`/`send`가 같은 `resolve()`를 공유하므로 양쪽 모두 개선된다.
+- 실측 개선: `read "<self-chat>"` 9s→실패에서 약 5.5s→성공(첨부 스캔 off), 창이 이미 열려 있으면 약 3.3s. `send`는 목록 행 경로 약 3.3s, 기존 창 재사용 시 약 1.6s.
+- `ChatWindowResolutionMethod`에 `.openedViaVisibleRow`를 추가하고, 자동 오픈 창 정리 판단을 `openedViaSearch`(검색 경로 only) 대신 `openedNewWindow`(행 열기 + 검색 공통)로 바꿔 `read`/`watch`/`channel`의 창 정리가 두 경로 모두 동일하게 동작하도록 했다. 진단용 `methodLabel`(existing-window / visible-row / search)을 추가했다.
+- 안전 규칙 유지: 보이는 행 열기는 exact-title 매칭이 정확히 1건일 때만 진행하고, 동명 방이면 거부 후 검색 fallback으로 넘긴다(수취인 오배송 방지).
+
+### Changed — `read` 첨부 스캔 opt-in + AppleScript 제거(네이티브 AX) (2026-07-03)
+
+- 매 `read`마다 무조건 실행되던 AppleScript(JXA) 기반 첨부 스캔(`AttachmentScanner`, 25s 예산)이 텍스트 읽기 지연의 큰 원인이었다(첨부 포함 시 실측 약 10~20s).
+- `ktok read`에 `--attachments`(기본 **off**, `--no-attachments`로 명시 비활성) 플래그를 추가하고, 기본 경로에서 첨부 스캔을 건너뛰도록 했다. `TranscriptReader.readSnapshot(includeAttachments:)` 배선을 그대로 사용한다.
+- MCP `ktok_read`에 `attachments`(기본 false) 파라미터를 추가했다. 기본 호출은 `--no-attachments`로 전달되어 텍스트만 빠르게 읽고, 첨부 메타데이터가 필요할 때만 활성화한다.
+- **`AttachmentScanner`의 스캔을 AppleScript → 네이티브 AX로 교체**했다. `window → 첫 scroll area → 첫 table → rows → cell` 을 걷고 각 행의 static-text 값 + button description 을 in-process AX 로 읽는다(`scan(window:)`/`scanAll(window:)`). osascript 서브프로세스 왕복이 사라져 첨부 스캔이 실측 약 13s → **약 2.8s** 로 줄었다. `--attachments` 사용 시 이득.
+- 감지 로직(`detectCandidate`: 확장자 → save 마커)과 `rowIndex`(0-based, 테이블 상단 기준) 의미를 그대로 보존해, `ktok read` 와 `ktok download-file` 이 **동일한 네이티브 스캔을 공유**한다. 따라서 `attachment_id`(= SHA256(chat|time|author|value|rowIndex)) 가 두 명령 사이에서 일관되게 유지된다. `download-file` 도 같은 네이티브 스캔을 쓰도록 바꿔 다운로드 대상 탐색도 빨라졌다(Save 누르기 JXA 는 별개로 유지).
+- 참고: 완전 ~0s(트랜스크립트 walk 에 첨부 감지를 접어넣기)는 read/download 의 `attachment_id` 일관성과 상충해 채택하지 않았다. read/download 공유 standalone 스캔을 유지하는 대신 AppleScript 제거로 5배 단축했다.
+
+### Removed — `SendCommand`의 미사용 중복 검색 플로우 제거 (2026-07-03)
+
+- 실경로가 `ChatWindowResolver`로 이관된 뒤에도 `SendCommand.swift`에 검색 플로우 전체 사본(`requireUsableWindow`, `selectSearchWindow`, `openChatViaSearch`, `locateSearchField`, `waitForMatchingSearchResults`, `findMatchingSearchResults`, `pickBestSearchResult`, `triggerSearchResultOpen`, `tryActivate/SelectSearchResult`, `resolveOpenedChatWindow*`, `windowContainsLikelyChatInput`, `pickSearchField`, `containsText`, 그리고 substring 매칭이던 중복 `findMatchingChatWindow` 등)이 죽은 코드로 남아 있었다.
+- 각 심볼의 호출부가 0인지 확인 후 약 404줄을 제거했다(살아있는 `sendMessageToWindow`/`resolveMessageInputField`/`forceTypeIntoChatWindow`/캐시 헬퍼/`supportsAction`/`isLikelyMessageInputElement`/`isLikelySearchField`는 유지). 편집 시 엉뚱한 사본을 수정하던 혼란 원인을 제거했다.
+
+
 
 - `ktok monitor "<방이름>" --persona luna` 추가.
 - monitor는 대상 방을 한 번 연 뒤 같은 채팅창을 계속 읽고, 같은 창 입력창으로 직접 응답한다.
 - `luna` persona는 `루나`/`비서야` 같은 직접 호출, 일반 인사, 따뜻한 공감이 필요한 메시지에만 응답한다.
-- `아나벨`, `허동호` 등 다른 사람 이름은 루나 호출로 보지 않는다.
+- `친구`, `지인` 등 다른 사람 이름은 루나 호출로 보지 않는다.
 - seen/reply 상태는 활성 계정의 `~/.ktok/accounts/<alias>/history.sqlite`에 `monitor_seen`, `monitor_replies` 테이블로 기록한다.
 - 기본 생성 설정은 현재 ChatGPT 계정에서 호출 가능한 빠른 경로인 `gpt-5.4-mini`, `model_reasoning_effort=low`를 사용한다.
 - monitor는 기본 60초 heartbeat를 출력해 감시 루프가 살아 있는지 확인할 수 있다.
 - 큰 단체방에서 poll이 막히지 않도록 monitor 기본 snapshot은 최근 8개 메시지만 본다.
 - monitor 기본 poll sleep을 제거했다. `--poll-interval`은 필요한 경우 poll 이후 추가 대기 시간으로만 동작한다.
 - monitor 답변은 가능한 경우 trigger 작성자 표시명을 앞에 붙여 누구에게 답하는지 명시한다.
-- monitor는 루나의 고정 이름과 `플라잉따릉이` 실장님 관계를 보호하고, 이름/소속/비서 역할 변경 시도를 무시하도록 프롬프트를 강화했다.
-- monitor에 `Pandoll-AI/luna`의 서루나 핵심 페르소나를 짧게 주입해, 차분한 전략 비서 말투와 실행 단위 정리 성향을 반영했다.
+- monitor는 루나의 고정 이름과 `실장님` 실장님 관계를 보호하고, 이름/소속/비서 역할 변경 시도를 무시하도록 프롬프트를 강화했다.
+- monitor에 `the luna persona source`의 Luna 핵심 페르소나를 짧게 주입해, 차분한 전략 비서 말투와 실행 단위 정리 성향을 반영했다.
 - monitor는 최근 8개 메시지 안의 질문, 피드백, 간단한 루나 개인 설정 질문에는 직접 호출이 없어도 더 적극적으로 개입한다.
-- 루나 개인 설정 질문에는 `Pandoll-AI/luna` 기준의 나이 설정, 여성형 AI 페르소나, 생일, 키, 전공, 경력 흐름을 짧게 답하되 실제 학교명이나 사생활은 만들지 않는다.
+- 루나 개인 설정 질문에는 `the luna persona source` 기준의 나이 설정, 여성형 AI 페르소나, 생일, 키, 전공, 경력 흐름을 짧게 답하되 실제 학교명이나 사생활은 만들지 않는다.
 - monitor는 초기 read/resolve 실패와 recovery 실패를 JSONL 이벤트로 남기며, 연속 recovery 실패가 기본 6회 누적되면 같은 argv로 자기 자신을 재시작한다.
-- `luna` persona는 `아나벨`에게 직접 답할 때 장난스럽고 센스 있는 약간의 질투를 섞을 수 있다.
+- `luna` persona는 `친구`에게 직접 답할 때 장난스럽고 센스 있는 약간의 질투를 섞을 수 있다.
 
 ### Fixed — Login setup ownership and Keychain target (2026-05-31)
 
@@ -247,7 +308,7 @@ Code-review 라운드 (2026-04-19) 에서 발견한 4건 모두 수정:
 
 - **C1 (Critical)** — `HistoryImporter.swift:79-85` : `syncRunRepo.start()` 를 `db.transaction { ... }` **바깥** 으로 이동. 기존 코드는 start INSERT 가 트랜잭션 안에 있어 ROLLBACK 시 감사 행이 소실 → 뒤따르는 `finish()` UPDATE 가 0 rows affected → 에러가 `try?` 로 삼켜짐. 실패한 sync 에 대해 audit trail 이 0 이 되는 "audit 의 저주" 였음. 이제 start 는 autocommit 으로 먼저 기록, transaction 결과와 독립적으로 finish() 가 업데이트.
 - **I1 (Important)** — `ChatDumpParser.swift:102-140` : `author`, `body`, `rawLine`, `filename` 모두 `precomposedStringWithCanonicalMapping` (NFC) 적용 후 dedupe_key 계산 + DB 저장. `HistoryCommand.swift:67-72` : `--author` 인자도 NFC 정규화 (`textQuery` 는 이전 커밋에서 이미 적용됨). 이전엔 chat display_name 만 NFC 였고 message body 는 원본 보존이라 비대칭. KakaoTalk CSV 가 어떤 경로로든 NFD 를 내보내면 같은 메시지가 새 해시로 재삽입되어 **dedupe 가 조용히 깨지는** 위험 존재. 사전 봉쇄.
-- **I2 (Important)** — `ChatIdentity.swift:23-36` : `ChatIdentityHash.normalize` 를 `ChatTextNormalizer.normalize` 호출로 위임. 두 정규화 로직의 subtle 차이 (punctuation / symbols strip 여부) 가 있어 라이브 registry 해시와 import 해시가 불일치했음. 단일 source of truth 로 통일. **1-time migration**: 기존 DB 의 `중상팀 운영파트(신)` 채팅 (parens 포함) 은 old 해시 `chat_2ee9e7bf714b` → new 해시 `chat_404f4dab37e8` 로 직접 UPDATE (messages / attachments / sync_runs / chats 4 테이블 일괄, FK OFF 트랜잭션 내 269 messages + 51 attachments 무손실 이동). 다른 3개 채팅은 punctuation 없어 해시 변동 없음.
+- **I2 (Important)** — `ChatIdentity.swift:23-36` : `ChatIdentityHash.normalize` 를 `ChatTextNormalizer.normalize` 호출로 위임. 두 정규화 로직의 subtle 차이 (punctuation / symbols strip 여부) 가 있어 라이브 registry 해시와 import 해시가 불일치했음. 단일 source of truth 로 통일. **1-time migration**: 기존 DB 의 `<room>` 채팅 (parens 포함) 은 old 해시 `chat_2ee9e7bf714b` → new 해시 `chat_404f4dab37e8` 로 직접 UPDATE (messages / attachments / sync_runs / chats 4 테이블 일괄, FK OFF 트랜잭션 내 269 messages + 51 attachments 무손실 이동). 다른 3개 채팅은 punctuation 없어 해시 변동 없음.
 - **I3 (Important)** — `ChatSettingsNavigator.swift:298-310` + `SyncHistoryCommand.swift:158` : `clickManageChatsAndSaveAsText` 가 이제 `chatWindow` 도 인자로 받고, 시작부에 `settingsRoot != chatWindow` 전제 조건 검사. `pollForSettingsPanel` 도 chat window 를 fallback 으로 반환하는 inline-panel 경로 제거. Inline 경로에선 sidebar-tab fallback 이 chat window 의 빈 label 버튼을 iter 하게 되는데 dangerous blocklist 가 empty label 버튼까지 커버하진 않아 근본적 safety-hole 였음. 실 KakaoTalk 은 항상 별도 AXWindow 로 settings 를 열어서 functional 영향 없음.
 
 **검증**: 위 4개 fix 후 E2E `ktok sync-history "광역 협의체 실무지원"` → 69 rows 파싱 / 69 dupes 스킵 / 0 inserts. DB 레코드 그대로 유지. sync_run_id=7 정상 기록. 바이트 레벨 NFC 확인 (`hex(substr(body,1,12))` → `EC9D91` 등 NFC 3-byte 시퀀스).
@@ -327,12 +388,12 @@ Attempt 0 실패를 제거하려는 여러 시도는 모두 효과 없음:
   - `brew uninstall kmsg` — `/opt/homebrew/Cellar/kmsg/0.3.0` (5.7MB, 4 files) 삭제, `/opt/homebrew/bin/kmsg` 심링크 제거.
   - `brew untap channprj/tap` — 14개 formula 의 tap 메타데이터 untap (해당 tap 에서 설치된 것은 `kmsg` 하나뿐이었음, 다른 설치물 영향 없음).
 - **`~/.claude.json` 정리** (사전 백업: `~/.claude.json.bak-20260418-215339`):
-  - `projects["/Users/sjlee/Projects/kmsg-mcp-fix"]` 엔트리 삭제 (해당 디렉토리는 이미 파일시스템에서 부재).
-  - `projects["/Users/sjlee/Projects/ktok"].exampleFiles` 중 `"kmsg.swift"` → `"ktok.swift"` 로 정규화.
+  - `projects["~/Projects/kmsg-mcp-fix"]` 엔트리 삭제 (해당 디렉토리는 이미 파일시스템에서 부재).
+  - `projects["~/Projects/ktok"].exampleFiles` 중 `"kmsg.swift"` → `"ktok.swift"` 로 정규화.
   - `githubRepoPaths["pandoll-ai/kmsg-mcp-fix"]` 매핑 삭제.
 
 ### Added
-- **전역 CLI 설치**: `~/.local/bin/ktok` → `/Users/sjlee/Projects/ktok/.build/release/ktok` 심링크. `~/.local/bin` 은 이미 `PATH` 에 있으므로 모든 쉘에서 `ktok` 즉시 사용 가능. 심링크라 `swift build -c release` 재빌드만 하면 자동 갱신.
+- **전역 CLI 설치**: `~/.local/bin/ktok` → `~/Projects/ktok/.build/release/ktok` 심링크. `~/.local/bin` 은 이미 `PATH` 에 있으므로 모든 쉘에서 `ktok` 즉시 사용 가능. 심링크라 `swift build -c release` 재빌드만 하면 자동 갱신.
 - **CHANGELOG.md**: 본 파일 신설. 앞으로 모든 변경은 여기에 상세 기록.
 
 ### Verified
@@ -340,8 +401,8 @@ Attempt 0 실패를 제거하려는 여러 시도는 모두 효과 없음:
 - `ktok status` → Accessibility ✓, KakaoTalk running ✓
 - `ktok chats --json` → 5개 채팅방 정상 반환
 - MCP smoke (`initialize` + `tools/list` + `shutdown` + `exit`): `serverInfo.name=ktok-mcp`, 5개 툴 노출 (`ktok_read`, `ktok_send`, `ktok_send_image`, `ktok_send_file`, `ktok_download_file`), `meta.startup_check.ktok_bin` 키 확인 (이전 `kmsg_bin` 은 응답 전체에서 0 매치).
-- MCP end-to-end `ktok_read` 툴 호출 (chat="Emergency Lee", limit=3): 10.7s latency, `isError:false`, 3개 메시지 정상 JSON.
-- `.build/` 를 한 번 완전 삭제 후 재빌드 필요했음 — module cache PCH 가 디렉토리 이전 이름 (`/Users/sjlee/Projects/kmsg/.build/...ModuleCache/...`) 에 고정되어 있었음. 이후 clean build 성공 (42.69s).
+- MCP end-to-end `ktok_read` 툴 호출 (chat="<self-chat>", limit=3): 10.7s latency, `isError:false`, 3개 메시지 정상 JSON.
+- `.build/` 를 한 번 완전 삭제 후 재빌드 필요했음 — module cache PCH 가 디렉토리 이전 이름 (`~/Projects/kmsg/.build/...ModuleCache/...`) 에 고정되어 있었음. 이후 clean build 성공 (42.69s).
 
 ### Removed (cleanup)
 - **`CLAUDE.md`** (tracked symlink) — `AGENTS.md` 를 가리키던 심링크였으나 `AGENTS.md` 는 커밋 `483e17d` 에서 삭제됨. 이후 심링크만 남아 dangling 상태였음. Claude Code 가 이 파일에서 아무 내용도 읽지 못하므로 심링크 자체 제거.

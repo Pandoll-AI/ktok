@@ -121,17 +121,19 @@ struct AXActionRunner {
         label: String,
         attempts: Int = 2,
         perCharacterDelay: TimeInterval = 0.01,
-        retryDelay: TimeInterval = 0.08
+        retryDelay: TimeInterval = 0.08,
+        reflectionTimeout: TimeInterval = 0.3,
+        deliverToPID: pid_t? = nil
     ) -> Bool {
         for attempt in 1...max(attempts, 1) {
             let before = element?.stringValue
-            typeText(text, perCharacterDelay: perCharacterDelay)
+            typeText(text, perCharacterDelay: perCharacterDelay, toPID: deliverToPID)
             guard let element else {
                 log("\(label): typed without verification target")
                 return true
             }
 
-            let reflected = waitUntil(label: "\(label) typing reflected", timeout: 0.3, condition: {
+            let reflected = waitUntil(label: "\(label) typing reflected", timeout: reflectionTimeout, condition: {
                 let after = element.stringValue
                 return isTypingReflected(before: before, after: after, typed: text)
             })
@@ -148,16 +150,24 @@ struct AXActionRunner {
     }
 
     @discardableResult
+    /// Presses Enter and verifies the input reflected the send (cleared/changed).
+    ///
+    /// When `deliverToPID` is non-nil, the key event is delivered directly to
+    /// that process via `CGEvent.postToPid` instead of the global HID tap. This
+    /// lets a send complete WITHOUT bringing KakaoTalk to the foreground, so the
+    /// user's frontmost app is not disturbed. The caller falls back to the
+    /// foreground path (global tap) if this returns false.
     func pressEnterWithVerification(
         on element: UIElement?,
         label: String,
         attempts: Int = 2,
         reflectionTimeout: TimeInterval = 0.45,
-        retryDelay: TimeInterval = 0.12
+        retryDelay: TimeInterval = 0.12,
+        deliverToPID: pid_t? = nil
     ) -> Bool {
         for attempt in 1...max(attempts, 1) {
             let before = element?.stringValue ?? ""
-            pressKey(code: 36)
+            pressKey(code: 36, toPID: deliverToPID)
 
             guard let element else {
                 log("\(label): Enter sent without verification target")
@@ -206,6 +216,13 @@ struct AXActionRunner {
 
     func pressEnterKey() {
         pressKey(code: 36)
+    }
+
+    /// Presses Enter delivered directly to a specific process via
+    /// `CGEvent.postToPid`, so it reaches KakaoTalk even when it is not the
+    /// frontmost app (background-safe; won't leak keys to another app).
+    func pressEnterKey(toPID pid: pid_t) {
+        pressKey(code: 36, toPID: pid)
     }
 
     func pressDownArrowKey() {
@@ -282,7 +299,7 @@ struct AXActionRunner {
         pressKey(code: 9, flags: .maskCommand) // V
     }
 
-    private func typeText(_ text: String, perCharacterDelay: TimeInterval) {
+    private func typeText(_ text: String, perCharacterDelay: TimeInterval, toPID: pid_t? = nil) {
         let source = CGEventSource(stateID: .hidSystemState)
 
         for char in text {
@@ -290,24 +307,34 @@ struct AXActionRunner {
             if let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
                 var unicode = Array(unit.utf16)
                 down.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode)
-                down.post(tap: .cghidEventTap)
+                if let toPID { down.postToPid(toPID) } else { down.post(tap: .cghidEventTap) }
             }
             if let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
-                up.post(tap: .cghidEventTap)
+                var unicode = Array(unit.utf16)
+                up.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode)
+                if let toPID { up.postToPid(toPID) } else { up.post(tap: .cghidEventTap) }
             }
             Thread.sleep(forTimeInterval: perCharacterDelay)
         }
     }
 
-    private func pressKey(code: CGKeyCode, flags: CGEventFlags = []) {
+    private func pressKey(code: CGKeyCode, flags: CGEventFlags = [], toPID: pid_t? = nil) {
         let source = CGEventSource(stateID: .hidSystemState)
         if let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true) {
             down.flags = flags
-            down.post(tap: .cghidEventTap)
+            if let toPID {
+                down.postToPid(toPID)
+            } else {
+                down.post(tap: .cghidEventTap)
+            }
         }
         if let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) {
             up.flags = flags
-            up.post(tap: .cghidEventTap)
+            if let toPID {
+                up.postToPid(toPID)
+            } else {
+                up.post(tap: .cghidEventTap)
+            }
         }
     }
 
