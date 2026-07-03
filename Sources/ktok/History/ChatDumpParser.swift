@@ -149,7 +149,7 @@ struct ChatDumpParser {
     private func attachmentDirection(author: String) -> AttachmentDirection {
         guard let myKakaoId, !myKakaoId.isEmpty else { return .unknown }
         // Author is already NFC at this call site; normalize the config
-        // side as well so `--my-kakao-id "Emergency Lee"` from shell (NFC)
+        // side as well so `--my-kakao-id "<my-name>"` from shell (NFC)
         // matches the stored author (also NFC).
         let myNFC = myKakaoId.precomposedStringWithCanonicalMapping
         return author == myNFC ? .sent : .received

@@ -64,6 +64,7 @@ Options:
 | `--keep-window`, `-k` | Keep auto-opened chat window. |
 | `--deep-recovery` | Use slower recovery if fast window resolution fails. |
 | `--json` | Emit JSON. |
+| `--attachments` / `--no-attachments` | Scan transcript attachments (files/images). Default **off**; runs a slow AppleScript pass, so enable only when attachment metadata is needed. |
 | `--record-events` / `--no-record-events` | Record observed messages/attachments to workspace. Default on. |
 
 JSON shape:
@@ -122,6 +123,77 @@ Attachment event:
 ```json
 {"chat":"채팅방","event":"attachment","detected_at":"2026-05-29T10:00:03.000Z","attachment":{"attachment_id":"att_0123456789abcdef","chat":"채팅방","filename":"report.pdf","candidate_value":"report.pdf","row_index":42,"reason":"extension"}}
 ```
+
+## monitor
+
+```bash
+ktok monitor "채팅방" --persona luna
+ktok monitor "채팅방" --persona luna --json
+ktok monitor "채팅방" --persona luna --dry-run
+```
+
+`monitor` opens one target room, keeps reading only that fixed room, and sends replies through the same chat window. This is intended for low-latency room-specific agent operation.
+
+Options:
+
+| Option | Meaning |
+| --- | --- |
+| `--persona <name>` | Persona to use. Currently supported: `luna`. |
+| `--poll-interval <seconds>` | Optional extra sleep after each monitor poll. Default `0`; read time itself naturally throttles the loop. |
+| `--model <model>` | Codex model for reply generation. |
+| `--reasoning-effort <value>` | Codex reasoning effort config value. |
+| `--reply-timeout <seconds>` | Maximum wait for a generated reply. |
+| `--heartbeat-interval <seconds>` | Emit a monitor heartbeat while the fixed-room loop is alive. Use `0` to disable. |
+| `--snapshot-limit <count>` | Visible message count retained for context. Default `8`. |
+| `--trace-ax` | Print Accessibility trace. |
+| `--deep-recovery` | Use slower recovery when the room window becomes stale. |
+| `--dry-run` | Decide and log replies without sending. |
+| `--json` | Emit monitor events as JSONL. |
+
+Persona identity/voice is loaded from `~/.ktok/persona/<name>.json` (see the `persona` command and `docs/PERSONA_SETUP.md`); a neutral default is used when no file exists.
+
+## bot
+
+An always-on background chatbot over the **allowlisted** rooms (`ktok channel monitor add`). Replies focus-free (KakaoTalk stays in the background) and keeps the Mac awake while running.
+
+```bash
+ktok channel monitor add --title "<room>"       # allowlist a room first
+ktok bot run --persona luna                      # foreground/background loop
+ktok bot run --persona luna --trigger-mode mention --json
+ktok bot run --persona luna --dry-run --max-loops 3 --json
+ktok bot install-daemon --persona luna --load    # optional LaunchAgent
+```
+
+Dev machine: `ktok bot run --persona luna --json >> ~/.ktok/bot/logs/bot.log 2>&1 &` (no daemon needed).
+
+Options:
+
+| Option | Meaning |
+| --- | --- |
+| `--persona <name>` | Persona config (`~/.ktok/persona/<name>.json`). |
+| `--trigger-mode <mode>` | `persona` (default, decision gating) / `mention` (direct calls only) / `all` (every new message) / `off` (detect only). |
+| `--model` / `--reasoning-effort` / `--reply-timeout` | Codex model (default `gpt-5.4-mini`), effort (default `medium`), reply timeout. |
+| `--loop-delay` / `--poll-interval` | Base and extra sleep between room sweeps. |
+| `--snapshot-limit` / `--heartbeat-interval` | Context size / heartbeat cadence. |
+| `--dry-run` | Decide and log replies without sending. |
+| `--no-caffeine` | Allow the Mac to sleep (default keeps it awake). |
+| `--max-loops <n>` | Stop after N sweeps (0 = forever). |
+| `--deep-recovery` / `--trace-ax` / `--json` | Recovery / trace / JSONL output. |
+
+Safety: only allowlisted rooms are ever answered; the bot never replies to its own outgoing messages; if a reply is unsafe/unclear it outputs `SKIP`.
+
+## persona
+
+Manage persona config files under `~/.ktok/persona/` (private, gitignored — no persona content ships in source).
+
+```bash
+ktok persona init --name luna     # scaffold ~/.ktok/persona/luna.json
+ktok persona path --name luna     # print file path
+ktok persona validate --name luna # check it parses
+ktok persona show --name luna     # print resolved config
+```
+
+See `docs/PERSONA_SETUP.md` for the schema and an LLM-assisted way to write the `system_prompt`.
 
 ## send / send-image / send-file
 
@@ -242,7 +314,7 @@ MCP tools:
 
 | Tool | CLI equivalent |
 | --- | --- |
-| `ktok_read` | `ktok read --json` |
+| `ktok_read` | `ktok read --json` (attachments off by default; pass `attachments: true` to scan) |
 | `ktok_send` | `ktok send` |
 | `ktok_send_image` | `ktok send-image` |
 | `ktok_send_file` | `ktok send-file` |

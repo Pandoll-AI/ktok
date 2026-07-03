@@ -105,7 +105,7 @@ struct WatchCommand: ParsableCommand {
 
         var currentWindow = resolution.window
         var currentChatTitle = currentWindow.title ?? chat
-        var autoOpenedWindow: UIElement? = resolution.openedViaSearch ? currentWindow : nil
+        var autoOpenedWindow: UIElement? = resolution.openedNewWindow ? currentWindow : nil
         var cachedContext: MessageTranscriptContext?
 
         defer {
@@ -237,7 +237,7 @@ struct WatchCommand: ParsableCommand {
         currentWindow = resolution.window
         currentChatTitle = currentWindow.title ?? chat
         cachedContext = nil
-        if resolution.openedViaSearch {
+        if resolution.openedNewWindow {
             autoOpenedWindow = currentWindow
         }
         return try stabilizeBaseline(

@@ -1,3 +1,4 @@
+import ApplicationServices.HIServices
 import CryptoKit
 import Foundation
 
@@ -42,119 +43,131 @@ enum AttachmentScanner {
         let axError: String?
     }
 
-    static func scan(chat: String, filename: String?) -> ScanResult {
-        scanVisibleCandidates(chat: chat, filename: filename, limit: 1)
+    static func scan(window: UIElement, filename: String?) -> ScanResult {
+        scanVisibleCandidates(window: window, filename: filename, limit: 1)
     }
 
-    static func scanAll(chat: String, filename: String? = nil) -> ScanResult {
-        scanVisibleCandidates(chat: chat, filename: filename, limit: nil)
+    static func scanAll(window: UIElement, filename: String? = nil) -> ScanResult {
+        scanVisibleCandidates(window: window, filename: filename, limit: nil)
     }
 
-    private static func scanVisibleCandidates(chat: String, filename: String?, limit: Int?) -> ScanResult {
-        let script = """
-        on run argv
-          set chatName to (item 1 of argv)
-          tell application "System Events"
-            tell process "KakaoTalk"
-              set chatWin to window chatName
-              set sa to scroll area 1 of chatWin
-              set tbl to table 1 of sa
-              set rowCount to count of rows of tbl
-              set output to ""
-              repeat with ri from rowCount to 1 by -1
-                try
-                  set r to row ri of tbl
-                  set c to UI element 1 of r
-                  set vals to value of every static text of c
-                  set btns to description of every button of c
-                  set AppleScript's text item delimiters to "\\t"
-                  set vLine to (vals as text)
-                  set bLine to (btns as text)
-                  set AppleScript's text item delimiters to ""
-                  set output to output & ((ri - 1) as text) & "|" & vLine & "|" & bLine & linefeed
-                end try
-              end repeat
-              return output
-            end tell
-          end tell
-        end run
-        """
-
-        let output = AppleScriptRunner.runAppleScript(script, argv: [chat], timeoutSec: 25.0)
-        if output.returncode != 0 {
-            let err = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            let short = err.count > 200 ? String(err.prefix(200)) : err
-            return ScanResult(candidates: [], axError: "as_rc=\(output.returncode) err=\(short)")
+    /// Native Accessibility scan of a chat window's message table.
+    ///
+    /// Mirrors the previous single-shot AppleScript (`table 1 of scroll area 1
+    /// of window`, per-row `value of every static text` + `description of every
+    /// button`) but stays in-process, so it costs a handful of AX reads instead
+    /// of a ~10s osascript round-trip. `rowIndex` is the 0-based top-down table
+    /// position — identical to the AppleScript's `(ri - 1)` — so `attachmentID`
+    /// stays stable across `ktok read` and `ktok download-file`.
+    private static func scanVisibleCandidates(window: UIElement, filename: String?, limit: Int?) -> ScanResult {
+        guard let table = locateTable(in: window) else {
+            return ScanResult(candidates: [], axError: "native_no_table")
         }
-        let text = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty {
-            return ScanResult(candidates: [], axError: "as_empty")
+        let rows = table.children.filter { $0.role == kAXRowRole }
+        if rows.isEmpty {
+            return ScanResult(candidates: [], axError: "native_no_rows")
         }
 
-        let candidates = parse(text: text, filename: filename, limit: limit)
-        return ScanResult(candidates: candidates, axError: nil)
-    }
-
-    static func parse(text: String, filename: String?, limit: Int? = nil) -> [Candidate] {
         var result: [Candidate] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let parts = line.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
-            guard parts.count == 3, let rowIndex = Int(parts[0]) else { continue }
-            let valsString = String(parts[1])
-            let vals = valsString.split(separator: "\t", omittingEmptySubsequences: true).map(String.init)
-            let buttonDescriptions = String(parts[2])
-                .split(separator: "\t", omittingEmptySubsequences: true)
-                .map(String.init)
-            // SavePressor re-queries the target row by row_index; button text is
-            // only used here to detect file bubbles whose filename is not visible.
+        // Walk bottom-up (newest first) so `limit` keeps the most recent rows,
+        // while rowIndex records the true top-down position.
+        for rowIndex in stride(from: rows.count - 1, through: 0, by: -1) {
+            let row = rows[rowIndex]
+            let cell = row.children.first { $0.role == kAXCellRole } ?? row
+            // Attachment metadata (filename static texts, Save/Open buttons)
+            // sits shallow inside the cell, so bound the BFS to keep the whole
+            // scan cheap even in rooms with dozens of rows.
+            let vals = cell.findAll(role: kAXStaticTextRole, limit: 16, maxNodes: 80)
+                .compactMap { $0.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let buttonDescriptions = cell.findAll(role: kAXButtonRole, limit: 10, maxNodes: 80)
+                .compactMap { $0.axDescription?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
 
-            var matched: Candidate?
-            let detectedFilename = vals.first(where: { FileExtensionMatcher.containsKnownExtension($0) })
-            let timeRaw = vals.first(where: { ChatTextNormalizer.isTimeLikeValue($0) })
-            let author = inferAuthor(from: vals, matchedFilename: detectedFilename, timeRaw: timeRaw)
-            if let filename, !filename.isEmpty {
-                if valsString.contains(filename) {
-                    let value = vals.first(where: { $0.contains(filename) }) ?? filename
-                    matched = Candidate(
-                        rowIndex: rowIndex,
-                        value: value,
-                        reason: .filename,
-                        filename: detectedFilename ?? value,
-                        author: author,
-                        timeRaw: timeRaw
-                    )
-                }
-            } else {
-                if let extVal = detectedFilename {
-                    matched = Candidate(
-                        rowIndex: rowIndex,
-                        value: extVal,
-                        reason: .extension,
-                        filename: extVal,
-                        author: author,
-                        timeRaw: timeRaw
-                    )
-                } else if let markerVal = vals.first(where: { FileExtensionMatcher.containsSaveMarker($0) })
-                    ?? buttonDescriptions.first(where: { FileExtensionMatcher.containsSaveMarker($0) }) {
-                    matched = Candidate(
-                        rowIndex: rowIndex,
-                        value: markerVal,
-                        reason: .marker,
-                        filename: nil,
-                        author: author,
-                        timeRaw: timeRaw
-                    )
-                }
-            }
-
-            if let matched {
-                result.append(matched)
+            if let candidate = detectCandidate(
+                rowIndex: rowIndex,
+                vals: vals,
+                buttonDescriptions: buttonDescriptions,
+                filename: filename
+            ) {
+                result.append(candidate)
                 if let limit, result.count >= limit {
                     break // rows are already newest-first
                 }
             }
         }
-        return result
+        return ScanResult(candidates: result, axError: nil)
+    }
+
+    /// Resolves the message table: `window → first scroll area → first table`,
+    /// matching AppleScript `table 1 of scroll area 1 of window`. Falls back to
+    /// a bounded descendant search if the direct-child shape differs.
+    private static func locateTable(in window: UIElement) -> UIElement? {
+        var scroll = window.children.first(where: { $0.role == kAXScrollAreaRole })
+        if scroll == nil {
+            scroll = window.findFirst(where: { $0.role == kAXScrollAreaRole })
+        }
+        if let scroll {
+            if let table = scroll.children.first(where: { $0.role == kAXTableRole }) {
+                return table
+            }
+            if let table = scroll.findFirst(where: { $0.role == kAXTableRole }) {
+                return table
+            }
+        }
+        return window.findFirst(where: { $0.role == kAXTableRole })
+    }
+
+    /// Shared attachment detection over one row's static-text values and button
+    /// descriptions. Unchanged from the previous AppleScript-fed logic.
+    static func detectCandidate(
+        rowIndex: Int,
+        vals: [String],
+        buttonDescriptions: [String],
+        filename: String?
+    ) -> Candidate? {
+        let detectedFilename = vals.first(where: { FileExtensionMatcher.containsKnownExtension($0) })
+        let timeRaw = vals.first(where: { ChatTextNormalizer.isTimeLikeValue($0) })
+        let author = inferAuthor(from: vals, matchedFilename: detectedFilename, timeRaw: timeRaw)
+
+        if let filename, !filename.isEmpty {
+            guard let value = vals.first(where: { $0.contains(filename) }) else {
+                return nil
+            }
+            return Candidate(
+                rowIndex: rowIndex,
+                value: value,
+                reason: .filename,
+                filename: detectedFilename ?? value,
+                author: author,
+                timeRaw: timeRaw
+            )
+        }
+
+        if let extVal = detectedFilename {
+            return Candidate(
+                rowIndex: rowIndex,
+                value: extVal,
+                reason: .extension,
+                filename: extVal,
+                author: author,
+                timeRaw: timeRaw
+            )
+        }
+
+        if let markerVal = vals.first(where: { FileExtensionMatcher.containsSaveMarker($0) })
+            ?? buttonDescriptions.first(where: { FileExtensionMatcher.containsSaveMarker($0) }) {
+            return Candidate(
+                rowIndex: rowIndex,
+                value: markerVal,
+                reason: .marker,
+                filename: nil,
+                author: author,
+                timeRaw: timeRaw
+            )
+        }
+
+        return nil
     }
 
     private static func inferAuthor(from values: [String], matchedFilename: String?, timeRaw: String?) -> String? {

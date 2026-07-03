@@ -51,6 +51,13 @@ struct ReadCommand: ParsableCommand {
     @Flag(name: .long, help: "Output in JSON format")
     var json: Bool = false
 
+    @Flag(
+        name: .customLong("attachments"),
+        inversion: .prefixedNo,
+        help: "Scan attachments (files/images) in the transcript. Off by default because it runs a slow AppleScript pass; enable only when you need attachment metadata."
+    )
+    var attachments: Bool = false
+
     @Flag(name: .customLong("record-events"), inversion: .prefixedNo, help: "Record observed messages and attachments to the shared ktok workspace")
     var recordEvents: Bool = true
 
@@ -83,8 +90,8 @@ struct ReadCommand: ParsableCommand {
         }
 
         let window = resolution.window
-        if resolution.openedViaSearch {
-            runner.log("read: opening chat via search")
+        if resolution.openedNewWindow {
+            runner.log("read: auto-opened chat window (method=\(resolution.methodLabel))")
             if keepWindow {
                 runner.log("read: keep-window enabled; auto-opened window will be kept")
             } else {
@@ -95,7 +102,7 @@ struct ReadCommand: ParsableCommand {
         }
 
         defer {
-            if resolution.openedViaSearch && !keepWindow {
+            if resolution.openedNewWindow && !keepWindow {
                 let resolvedTitle = window.title ?? ""
                 if !resolvedTitle.isEmpty && !resolvedTitle.localizedCaseInsensitiveContains(chat) {
                     runner.log("read: skipped auto-close because resolved title '\(resolvedTitle)' did not match query")
@@ -104,7 +111,7 @@ struct ReadCommand: ParsableCommand {
                 } else {
                     runner.log("read: failed to close auto-opened chat window")
                 }
-            } else if resolution.openedViaSearch && keepWindow {
+            } else if resolution.openedNewWindow && keepWindow {
                 runner.log("read: auto-opened chat window kept by --keep-window")
             }
         }
@@ -114,7 +121,8 @@ struct ReadCommand: ParsableCommand {
             snapshot = try transcriptReader.readSnapshot(
                 from: window,
                 fallbackChatTitle: chat,
-                limit: limit
+                limit: limit,
+                includeAttachments: attachments
             )
         } catch TranscriptReadError.transcriptContextUnavailable {
             print("Could not locate chat transcript area.")

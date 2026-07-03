@@ -272,7 +272,7 @@ struct ChannelMonitorListCommand: ParsableCommand {
             return
         }
         if chats.isEmpty {
-            print("No monitored chats. Add one with: ktok channel monitor add --title 'Emergency Lee'")
+            print("No monitored chats. Add one with: ktok channel monitor add --title '채팅방'")
             return
         }
         for chat in chats {
@@ -494,7 +494,7 @@ struct ChannelPollOnceCommand: ParsableCommand {
                 }
                 let resolution = try resolver.resolve(query: chat.title)
                 defer {
-                    if resolution.openedViaSearch && !keepWindow {
+                    if resolution.openedNewWindow && !keepWindow {
                         _ = resolver.closeWindow(resolution.window)
                     }
                 }
@@ -575,18 +575,110 @@ struct ChannelDaemonCommand: ParsableCommand {
     }
 }
 
+/// Helpers for generating LaunchAgent plists without hardcoding developer paths.
+enum LaunchAgentSupport {
+    /// Path to the currently-running ktok binary (resolved), so the LaunchAgent
+    /// points at whatever the user installed. Falls back to a neutral default.
+    static func defaultBinaryPath() -> String {
+        if let exe = Bundle.main.executablePath, !exe.isEmpty {
+            return URL(fileURLWithPath: exe).resolvingSymlinksInPath().path
+        }
+        if let arg0 = CommandLine.arguments.first, arg0.hasPrefix("/") {
+            return URL(fileURLWithPath: arg0).resolvingSymlinksInPath().path
+        }
+        return "/usr/local/bin/ktok"
+    }
+
+    /// A PATH value that includes the binary's own directory plus the standard
+    /// system/homebrew locations. No developer-specific directories.
+    static func pathEnvValue(forBinary binary: String?) -> String {
+        var entries: [String] = []
+        if let binary, binary.hasPrefix("/") {
+            let dir = URL(fileURLWithPath: binary).deletingLastPathComponent().path
+            if !dir.isEmpty { entries.append(dir) }
+        }
+        entries.append(contentsOf: ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+        var seen = Set<String>()
+        return entries.filter { seen.insert($0).inserted }.joined(separator: ":")
+    }
+
+    static func xmlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
+    static func plist(label: String, arguments: [String], workingDirectory: String, standardOutPath: String, standardErrorPath: String) -> String {
+        let escapedArguments = arguments.map { "        <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
+        let launchPath = pathEnvValue(forBinary: arguments.first)
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>\(xmlEscape(label))</string>
+            <key>ProgramArguments</key>
+            <array>
+        \(escapedArguments)
+            </array>
+            <key>WorkingDirectory</key>
+            <string>\(xmlEscape(workingDirectory))</string>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>KeepAlive</key>
+            <true/>
+            <key>LimitLoadToSessionType</key>
+            <string>Aqua</string>
+            <key>StandardOutPath</key>
+            <string>\(xmlEscape(standardOutPath))</string>
+            <key>StandardErrorPath</key>
+            <string>\(xmlEscape(standardErrorPath))</string>
+            <key>EnvironmentVariables</key>
+            <dict>
+                <key>PATH</key>
+                <string>\(xmlEscape(launchPath))</string>
+            </dict>
+        </dict>
+        </plist>
+        """
+    }
+
+    @discardableResult
+    static func runLaunchctl(_ args: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let out = String(data: data, encoding: .utf8) ?? ""
+            return "launchctl \(args.joined(separator: " ")) exit=\(process.terminationStatus) \(out)\n"
+        } catch {
+            return "launchctl \(args.joined(separator: " ")) error=\(error)\n"
+        }
+    }
+}
+
 struct ChannelInstallDaemonCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "install-daemon",
         abstract: "Install a macOS LaunchAgent for the channel polling daemon",
-        discussion: "Writes ~/Library/LaunchAgents/com.pandoll.ktok.channel.plist. Use --load to bootstrap it into the current Aqua GUI session."
+        discussion: "Writes ~/Library/LaunchAgents/<label>.plist. Use --load to bootstrap it into the current Aqua GUI session."
     )
 
     @Option(name: .long, help: "LaunchAgent label")
-    var label: String = "com.pandoll.ktok.channel"
+    var label: String = "com.ktok.channel"
 
-    @Option(name: .long, help: "Path to ktok binary")
-    var binary: String = "/Users/pandoll/.local/bin/ktok"
+    @Option(name: .long, help: "Path to ktok binary (defaults to the running executable)")
+    var binary: String = LaunchAgentSupport.defaultBinaryPath()
 
     @Flag(name: .long, help: "Enable AX trace logs in the daemon")
     var traceAX: Bool = false
@@ -678,6 +770,7 @@ struct ChannelInstallDaemonCommand: ParsableCommand {
         standardErrorPath: String
     ) -> String {
         let escapedArguments = arguments.map { "        <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
+        let launchPath = LaunchAgentSupport.pathEnvValue(forBinary: arguments.first)
         return """
         <?xml version=\"1.0\" encoding=\"UTF-8\"?>
         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
@@ -704,7 +797,7 @@ struct ChannelInstallDaemonCommand: ParsableCommand {
             <key>EnvironmentVariables</key>
             <dict>
                 <key>PATH</key>
-                <string>/Users/pandoll/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+                <string>\(xmlEscape(launchPath))</string>
             </dict>
         </dict>
         </plist>

@@ -5,6 +5,7 @@ import Foundation
 
 enum ChatWindowResolutionMethod {
     case existingWindow
+    case openedViaVisibleRow
     case openedViaSearch
 }
 
@@ -14,6 +15,22 @@ struct ChatWindowResolution {
 
     var openedViaSearch: Bool {
         method == .openedViaSearch
+    }
+
+    /// True when this resolution opened a chat window that was not already
+    /// present (visible-row press or search). Callers that clean up
+    /// auto-opened windows (e.g. `--keep-window` gating) should treat both the
+    /// visible-row and search paths the same way.
+    var openedNewWindow: Bool {
+        method == .openedViaVisibleRow || method == .openedViaSearch
+    }
+
+    var methodLabel: String {
+        switch method {
+        case .existingWindow: return "existing-window"
+        case .openedViaVisibleRow: return "visible-row"
+        case .openedViaSearch: return "search"
+        }
     }
 }
 
@@ -65,12 +82,42 @@ struct ChatWindowResolver {
     func resolve(query: String) throws -> ChatWindowResolution {
         let usableWindow = try requireUsableWindow()
 
+        // 1) Already-open conversation window (exact title). Cheapest path.
         if let existingWindow = findMatchingChatWindow(in: kakao.windows, query: query) {
             return ChatWindowResolution(window: existingWindow, method: .existingWindow)
         }
 
+        // 2) Optimistic fast path: if the target chat is visible in the chat
+        // list, press its row directly. This reuses the proven ChatListScanner
+        // (the same scan `ktok chats` relies on) and skips the slow, brittle
+        // search-field dance (focus → clear → type → 0.6s wait → ambiguous-
+        // result refusal). Most sends/reads target a recent room that is
+        // already near the top of the visible list, so this is the common case.
         let searchWindow = selectSearchWindow(fallback: usableWindow)
-        let chatWindow = try openChatViaSearch(query: query, in: searchWindow, fallbackWindow: usableWindow)
+        if let rowWindow = openVisibleExactChatRow(
+            query: query,
+            rootWindow: searchWindow,
+            fallbackWindow: usableWindow
+        ) {
+            return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
+        }
+
+        // 2b) The visible-row scan only sees the currently-rendered rows. If the
+        // Friends tab is active (or the row was not rendered yet), switch to the
+        // chatrooms tab once and retry before paying for the search flow.
+        activateChatroomsTab(in: searchWindow)
+        let chatroomsRoot = selectSearchWindow(fallback: usableWindow)
+        if let rowWindow = openVisibleExactChatRow(
+            query: query,
+            rootWindow: chatroomsRoot,
+            fallbackWindow: usableWindow
+        ) {
+            return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
+        }
+
+        // 3) Fallback: the room is not open and not visible in the list (needs
+        // scrolling/search) — use the heavier search-field flow.
+        let chatWindow = try openChatViaSearch(query: query, in: chatroomsRoot, fallbackWindow: usableWindow)
         return ChatWindowResolution(window: chatWindow, method: .openedViaSearch)
     }
 
@@ -78,9 +125,9 @@ struct ChatWindowResolver {
     func closeWindow(_ window: UIElement) -> Bool {
         let closeAction = "AXClose"
 
-        kakao.activate()
-        _ = tryRaiseWindow(window)
-
+        // Prefer AX close paths that work on a *background* window so closing a
+        // chat after a focus-free send does not yank KakaoTalk to the front.
+        // Only the Cmd+W keyboard fallback below needs the app foregrounded.
         if supportsAction(closeAction, on: window) {
             do {
                 try window.performAction(closeAction)
@@ -104,6 +151,8 @@ struct ChatWindowResolver {
         }
 
         runner.log("close window: fallback via cmd+w")
+        kakao.activate()
+        _ = tryRaiseWindow(window)
         guard runKakaoKeyboardFallback(label: "close window Cmd+W fallback", action: { runner.pressCommandW() }) else {
             runner.log("close window: Cmd+W fallback skipped because KakaoTalk is not frontmost")
             return false
@@ -745,7 +794,7 @@ struct ChatWindowResolver {
     }
 
     private func openVisibleExactChatRow(query: String, rootWindow: UIElement, fallbackWindow: UIElement) -> UIElement? {
-        runner.log("search: field unavailable; probing visible chat-list rows by exact title")
+        runner.log("resolve: probing visible chat-list rows by exact title")
         let visibleRows = ChatListScanner().scan(in: rootWindow, limit: 80) { message in
             runner.log("search-row: \(message)")
         }
@@ -774,6 +823,17 @@ struct ChatWindowResolver {
         }
 
         runner.log("search: visible exact-row selected; confirming via Enter")
+        // Prefer delivering Enter straight to KakaoTalk's process so a selected
+        // row opens even when KakaoTalk is in the background (e.g. bot/monitor
+        // running behind the user's app). postToPid is background-safe: the key
+        // reaches KakaoTalk only, never another frontmost app.
+        if let pid = kakao.processIdentifier {
+            runner.pressEnterKey(toPID: pid)
+            if let opened = waitForOpenedChatWindow(query: query, fallbackWindow: fallbackWindow) {
+                return opened
+            }
+            runner.log("search: postToPid Enter did not open window; trying frontmost keyboard fallback")
+        }
         guard runKakaoKeyboardFallback(label: "visible exact-row Enter fallback", action: { runner.pressEnterKey() }) else {
             runner.log("search: visible exact-row Enter fallback skipped because KakaoTalk is not frontmost")
             return nil

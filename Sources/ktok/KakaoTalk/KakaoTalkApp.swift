@@ -105,6 +105,12 @@ public final class KakaoTalkApp: Sendable {
     }
 
     /// Activate KakaoTalk (bring to foreground)
+    /// PID of the running KakaoTalk process, for delivering CGEvents directly to
+    /// the app (`CGEvent.postToPid`) without bringing it to the foreground.
+    public var processIdentifier: pid_t? {
+        Self.runningApplication?.processIdentifier
+    }
+
     public func activate() {
         guard let app = Self.runningApplication else { return }
 
