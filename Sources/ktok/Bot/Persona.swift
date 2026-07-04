@@ -65,6 +65,12 @@ struct Persona {
         return config.triggers.directCall.contains { body.localizedCaseInsensitiveContains($0) }
     }
 
+    /// Whether the message is a greeting configured for the persona.
+    func isGreeting(_ message: TranscriptMessage) -> Bool {
+        let body = normalized(message.body)
+        return config.triggers.greeting.contains { body.localizedCaseInsensitiveContains($0) }
+    }
+
     // MARK: - Fallback replies (used when the LLM returns nil)
 
     func fallbackReply(for message: TranscriptMessage) -> String {

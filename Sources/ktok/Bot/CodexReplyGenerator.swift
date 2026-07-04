@@ -127,7 +127,30 @@ struct CodexReplyGenerator {
     }
 
     private static func codexExecutableURL() -> URL {
-        for path in ["/opt/homebrew/bin/codex", "/usr/local/bin/codex", "/usr/bin/codex"] where FileManager.default.isExecutableFile(atPath: path) {
+        let manager = FileManager.default
+        var candidates: [String] = []
+
+        if let override = ProcessInfo.processInfo.environment["KTOK_CODEX_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            candidates.append((override as NSString).expandingTildeInPath)
+        }
+
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
+            candidates.append(contentsOf: pathEnv
+                .split(separator: ":")
+                .map { URL(fileURLWithPath: String($0)).appendingPathComponent("codex").path }
+            )
+        }
+
+        candidates.append(contentsOf: [
+            "\(NSHomeDirectory())/.local/bin/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "/usr/bin/codex",
+        ])
+
+        for path in candidates where manager.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
         return URL(fileURLWithPath: "/opt/homebrew/bin/codex")

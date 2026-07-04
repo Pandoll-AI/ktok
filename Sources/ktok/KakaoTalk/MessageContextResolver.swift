@@ -18,10 +18,12 @@ struct MessageContextResolver {
     }
 
     func resolve(in chatWindow: UIElement) -> MessageTranscriptContext? {
+        runner.log("read: chat window title='\(chatWindow.title ?? "unknown")' frame=\(frameDescription(chatWindow.frame))")
         guard let inputElement = resolveMessageInputField(chatWindow: chatWindow) else {
             runner.log("read: message input context unavailable")
             return nil
         }
+        runner.log("read: input element role='\(inputElement.role ?? "unknown")' frame=\(frameDescription(inputElement.frame))")
 
         let paneRoot = preferredChatPaneRoot(for: inputElement, in: chatWindow)
         if let paneRoot {
@@ -54,25 +56,30 @@ struct MessageContextResolver {
             return cachedInput
         }
 
-        if let focusedElement = kakao.applicationElement.focusedUIElement {
+        let focusedWindowMatches = kakao.focusedWindow.map { isLikelySameWindow($0, chatWindow) } ?? false
+        if focusedWindowMatches, let focusedElement = kakao.applicationElement.focusedUIElement {
             let focusedCandidates = collectFocusedElementLineageCandidates(focusedElement)
             runner.log("read: input fast path focused candidates=\(focusedCandidates.count)")
             if let input = pickMessageInputField(from: focusedCandidates, in: chatWindow) {
                 rememberCachedElement(slot: .messageInput, root: chatWindow, element: input)
                 return input
             }
+        } else if kakao.applicationElement.focusedUIElement != nil {
+            runner.log("read: input fast path skipped (focused window differs)")
         }
 
         for attempt in 1...2 {
             var candidates: [UIElement] = []
 
             if let focusedWindow = kakao.focusedWindow {
-                let focusedWindowCandidates = collectMessageInputCandidates(from: focusedWindow, limit: attempt == 1 ? 36 : 60)
-                candidates.append(contentsOf: focusedWindowCandidates)
-                if !areSameAXElement(focusedWindow, chatWindow) {
-                    let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
-                    candidates.append(contentsOf: chatWindowCandidates)
+                let focusedWindowMatches = isLikelySameWindow(focusedWindow, chatWindow)
+                var focusedWindowCandidates: [UIElement] = []
+                if focusedWindowMatches {
+                    focusedWindowCandidates = collectMessageInputCandidates(from: focusedWindow, limit: attempt == 1 ? 36 : 60)
+                    candidates.append(contentsOf: focusedWindowCandidates)
                 }
+                let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
+                candidates.append(contentsOf: chatWindowCandidates)
                 runner.log("read: input attempt \(attempt) focused=\(focusedWindowCandidates.count) total=\(candidates.count)")
             } else {
                 let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
@@ -80,7 +87,7 @@ struct MessageContextResolver {
                 runner.log("read: input attempt \(attempt) chatWindow=\(chatWindowCandidates.count)")
             }
 
-            if let focusedElement = kakao.applicationElement.focusedUIElement {
+            if focusedWindowMatches, let focusedElement = kakao.applicationElement.focusedUIElement {
                 let focusedCandidates = collectFocusedElementLineageCandidates(focusedElement)
                 candidates.append(contentsOf: focusedCandidates)
             }
@@ -305,8 +312,8 @@ struct MessageContextResolver {
 
     private func collectMessageInputCandidates(from root: UIElement, limit: Int = 80) -> [UIElement] {
         let nodeBudget = max(200, limit * 4)
+        let shallowCandidates = collectShallowMessageInputCandidates(from: root)
         let roleCandidates = root.findAll(where: { element in
-            guard element.isEnabled else { return false }
             return element.role == kAXTextAreaRole || element.role == kAXTextFieldRole
         }, limit: limit, maxNodes: nodeBudget)
 
@@ -318,7 +325,31 @@ struct MessageContextResolver {
             return role != kAXStaticTextRole && role != kAXImageRole
         }, limit: limit, maxNodes: nodeBudget)
 
-        return roleCandidates + editableCandidates
+        return shallowCandidates + roleCandidates + editableCandidates
+    }
+
+    private func collectShallowMessageInputCandidates(from root: UIElement) -> [UIElement] {
+        var candidates: [UIElement] = []
+        for child in root.children {
+            appendRawMessageInputCandidate(child, to: &candidates)
+            for grandchild in child.children {
+                appendRawMessageInputCandidate(grandchild, to: &candidates)
+            }
+        }
+        return candidates
+    }
+
+    private func appendRawMessageInputCandidate(_ element: UIElement, to candidates: inout [UIElement]) {
+        let role = element.role ?? ""
+        if role == kAXTextAreaRole || role == kAXTextFieldRole {
+            candidates.append(element)
+            return
+        }
+
+        let editable: Bool = element.attributeOptional(kAXEditableAttribute) ?? false
+        if editable, role != kAXStaticTextRole, role != kAXImageRole {
+            candidates.append(element)
+        }
     }
 
     private func collectFocusedElementLineageCandidates(_ focusedElement: UIElement) -> [UIElement] {
@@ -329,7 +360,6 @@ struct MessageContextResolver {
         while let element = cursor, hops < 4 {
             candidates.append(element)
             let textDescendants = element.findAll(where: { node in
-                guard node.isEnabled else { return false }
                 return node.role == kAXTextAreaRole || node.role == kAXTextFieldRole
             }, limit: 8, maxNodes: 48)
             candidates.append(contentsOf: textDescendants)
@@ -341,10 +371,14 @@ struct MessageContextResolver {
     }
 
     private func pickMessageInputField(from fields: [UIElement], in window: UIElement) -> UIElement? {
-        fields.sorted { lhs, rhs in
-            scoreMessageInputCandidate(lhs, in: window) > scoreMessageInputCandidate(rhs, in: window)
+        fields.map { field in
+            (field: field, score: scoreMessageInputCandidate(field, in: window))
         }
-        .first
+        .filter { $0.score.isFinite && $0.score > 0 }
+        .sorted { lhs, rhs in
+            lhs.score > rhs.score
+        }
+        .first?.field
     }
 
     private func scoreMessageInputCandidate(_ element: UIElement, in window: UIElement) -> Double {
@@ -389,13 +423,40 @@ struct MessageContextResolver {
     }
 
     private func isLikelyMessageInputElement(_ element: UIElement, in window: UIElement? = nil) -> Bool {
-        guard element.isEnabled else { return false }
         let role = element.role ?? ""
+
+        if let window {
+            guard isDescendant(element, of: window) else {
+                return false
+            }
+        }
+
+        if let windowFrame = window?.frame, let elementFrame = element.frame {
+            guard isElementLikelyInsideWindow(elementFrame: elementFrame, windowFrame: windowFrame) else {
+                return false
+            }
+
+            let relativeMinY = (elementFrame.minY - windowFrame.minY) / max(windowFrame.height, 1)
+            if role == kAXTextAreaRole {
+                // KakaoTalk message bubbles and chat-list previews can also be
+                // AXTextArea nodes. The composer lives below the transcript near
+                // the bottom of the chat window, so reject upper text areas.
+                return relativeMinY >= 0.80
+            }
+            if relativeMinY < 0.70 {
+                return false
+            }
+        } else if role == kAXTextAreaRole {
+            let editable: Bool = element.attributeOptional(kAXEditableAttribute) ?? false
+            return editable
+        }
+
         if role == kAXTextAreaRole {
             return true
         }
 
         let editable: Bool = element.attributeOptional(kAXEditableAttribute) ?? false
+        guard element.isEnabled || editable else { return false }
         guard editable else { return false }
         guard role != kAXStaticTextRole && role != kAXImageRole else { return false }
         if role == kAXTextFieldRole && isLikelySearchField(element, in: window) {
@@ -474,6 +535,37 @@ struct MessageContextResolver {
 
     private func areSameAXElement(_ lhs: UIElement, _ rhs: UIElement) -> Bool {
         CFEqual(lhs.axElement, rhs.axElement)
+    }
+
+    private func isLikelySameWindow(_ lhs: UIElement, _ rhs: UIElement) -> Bool {
+        if let lhsTitle = lhs.title, let rhsTitle = rhs.title, !lhsTitle.isEmpty, lhsTitle == rhsTitle {
+            return true
+        }
+
+        guard let lhsFrame = lhs.frame, let rhsFrame = rhs.frame else {
+            return false
+        }
+        return abs(lhsFrame.minX - rhsFrame.minX) < 2
+            && abs(lhsFrame.minY - rhsFrame.minY) < 2
+            && abs(lhsFrame.width - rhsFrame.width) < 2
+            && abs(lhsFrame.height - rhsFrame.height) < 2
+    }
+
+    private func isDescendant(_ element: UIElement, of root: UIElement) -> Bool {
+        if areSameAXElement(element, root) {
+            return true
+        }
+
+        var cursor = element.parent
+        var hops = 0
+        while let current = cursor, hops < 32 {
+            if areSameAXElement(current, root) {
+                return true
+            }
+            cursor = current.parent
+            hops += 1
+        }
+        return false
     }
 
     private func isElementLikelyInsideWindow(elementFrame: CGRect, windowFrame: CGRect) -> Bool {

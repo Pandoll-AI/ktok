@@ -614,6 +614,8 @@ enum LaunchAgentSupport {
     static func plist(label: String, arguments: [String], workingDirectory: String, standardOutPath: String, standardErrorPath: String) -> String {
         let escapedArguments = arguments.map { "        <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
         let launchPath = pathEnvValue(forBinary: arguments.first)
+        let home = NSHomeDirectory()
+        let user = NSUserName()
         return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -639,6 +641,12 @@ enum LaunchAgentSupport {
             <string>\(xmlEscape(standardErrorPath))</string>
             <key>EnvironmentVariables</key>
             <dict>
+                <key>KTOK_NO_ACCESSIBILITY_PROMPT</key>
+                <string>1</string>
+                <key>HOME</key>
+                <string>\(xmlEscape(home))</string>
+                <key>USER</key>
+                <string>\(xmlEscape(user))</string>
                 <key>PATH</key>
                 <string>\(xmlEscape(launchPath))</string>
             </dict>

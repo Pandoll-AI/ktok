@@ -1077,9 +1077,13 @@ struct ChatWindowResolver {
             runner.log("window: refusing ambiguous exact-title windows count=\(matches.count) query='\(query)'")
             return nil
         }
-        return matches.max(by: { lhs, rhs in
+        let matched = matches.max(by: { lhs, rhs in
             lhs.score < rhs.score
         })?.window
+        if let title = matched?.title {
+            runner.log("window: matched existing chat window title='\(title)'")
+        }
+        return matched
     }
 
     private func bestQueryMatch(

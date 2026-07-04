@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Fixed — Bot LaunchAgent/Codex onboarding and trigger hardening (2026-07-04)
+
+- `CodexReplyGenerator`가 `codex` 실행 파일을 찾을 때 `KTOK_CODEX_PATH`, `PATH`, `~/.local/bin/codex`, Homebrew/시스템 경로를 순서대로 확인하도록 수정했다. 비표준 설치 위치에서 LLM 생성이 실패해 persona fallback으로만 응답하던 문제를 방지한다.
+- bot `reply_ready` JSONL 이벤트에 `source=codex|fallback` 을 추가해, 트리거 감지 성공 후 실제 LLM 생성이 되었는지 fallback인지 로그만으로 구분할 수 있게 했다.
+- `--trigger-mode greeting` 추가: 직접 호출/멘션 또는 persona의 configured greeting에만 응답한다. `mention`보다 넓고 `persona`보다 좁은 운영 모드다.
+- `ktok bot install-daemon`에 `--model`, `--reasoning-effort`, `--reply-timeout`, `--loop-delay`, `--poll-interval` 옵션을 추가해 설치되는 LaunchAgent와 수동 `bot run`의 설정 차이를 줄였다.
+- LaunchAgent 템플릿에 `KTOK_NO_ACCESSIBILITY_PROMPT`, `HOME`, `USER`, 안정적인 `PATH` 환경 변수를 포함해 headless launchd 환경에서도 계정 홈과 CLI 경로를 재현하기 쉽게 했다.
+- KakaoTalk AX 입력창 탐색을 강화했다. focused window가 대상 채팅창과 다를 때 fast path를 건너뛰고, 하단 composer 후보를 먼저 확인하며, invalid 후보를 선택하지 않도록 했다. 큰 transcript/가상 스크롤 구조에서 메시지 말풍선이나 검색창을 입력창으로 오인해 `noMessageRows` 또는 잘못된 context가 나오는 문제를 줄인다.
+- `ktok-config*.tgz` / `ktok-config*.tar.gz` exported config archives를 `.gitignore`에 추가해 개인 설정 백업이 실수로 커밋되지 않게 했다.
+- bot 운영 runbook `docs/BOT_ONBOARDING.md`를 추가했다. Codex smoke test, LaunchAgent 설정, fallback 진단, monitor DB 확인, Accessibility/TCC 재허용, 개인정보 금지 규칙을 placeholder 기반으로 문서화했다.
+- `docs/CLI.md`와 README 문서 목록에 bot onboarding/runbook 링크와 `greeting` trigger mode 설명을 추가했다.
+
 ### Added — `ktok config export/import` (개인화 설정 다른 맥으로 이전) (2026-07-04)
 
 - `ktok config export -o <archive.tgz>` : 이식 가능한 개인화 설정만 `.tgz` 로 묶는다 — `persona/`, `channel/channel.sqlite`(허용목록·chat map), `chat-id-map.json`/`chat-registry.json`, `state/current-account.json`.

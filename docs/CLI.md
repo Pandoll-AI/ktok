@@ -159,19 +159,22 @@ An always-on background chatbot over the **allowlisted** rooms (`ktok channel mo
 ```bash
 ktok channel monitor add --title "<room>"       # allowlist a room first
 ktok bot run --persona luna                      # foreground/background loop
-ktok bot run --persona luna --trigger-mode mention --json
+ktok bot run --persona luna --trigger-mode greeting --json
 ktok bot run --persona luna --dry-run --max-loops 3 --json
 ktok bot install-daemon --persona luna --load    # optional LaunchAgent
 ```
 
 Dev machine: `ktok bot run --persona luna --json >> ~/.ktok/bot/logs/bot.log 2>&1 &` (no daemon needed).
 
+For persistent operation, Codex setup, LaunchAgent environment, and
+troubleshooting, see `docs/BOT_ONBOARDING.md`.
+
 Options:
 
 | Option | Meaning |
 | --- | --- |
 | `--persona <name>` | Persona config (`~/.ktok/persona/<name>.json`). |
-| `--trigger-mode <mode>` | `persona` (default, decision gating) / `mention` (direct calls only) / `all` (every new message) / `off` (detect only). |
+| `--trigger-mode <mode>` | `persona` (default, decision gating) / `mention` (direct calls only) / `greeting` (direct calls or configured greetings only) / `all` (every new message) / `off` (detect only). |
 | `--model` / `--reasoning-effort` / `--reply-timeout` | Codex model (default `gpt-5.4-mini`), effort (default `medium`), reply timeout. |
 | `--loop-delay` / `--poll-interval` | Base and extra sleep between room sweeps. |
 | `--snapshot-limit` / `--heartbeat-interval` | Context size / heartbeat cadence. |
@@ -181,6 +184,10 @@ Options:
 | `--deep-recovery` / `--trace-ax` / `--json` | Recovery / trace / JSONL output. |
 
 Safety: only allowlisted rooms are ever answered; the bot never replies to its own outgoing messages; if a reply is unsafe/unclear it outputs `SKIP`.
+
+Codex must be discoverable via `KTOK_CODEX_PATH`, `PATH`, or a standard install
+location. If reply logs show `source=fallback`, verify Codex before debugging
+KakaoTalk or the monitor database.
 
 ## persona
 

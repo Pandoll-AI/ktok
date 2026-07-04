@@ -18,3 +18,5 @@ persona.*.local.json
 *.local.json
 config.local.*
 /.ktok/
+ktok-config*.tgz
+ktok-config*.tar.gz

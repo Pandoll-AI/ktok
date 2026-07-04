@@ -42,8 +42,23 @@ struct BotInstallDaemonCommand: ParsableCommand {
     @Option(name: .long, help: "Persona name.")
     var persona: String = "luna"
 
-    @Option(name: .long, help: "Reply trigger mode: persona | mention | all | off.")
+    @Option(name: .long, help: "Reply trigger mode: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
+
+    @Option(name: .long, help: "Codex model for reply generation.")
+    var model: String = "gpt-5.4-mini"
+
+    @Option(name: .long, help: "Codex reasoning effort config value.")
+    var reasoningEffort: String = "medium"
+
+    @Option(name: .long, help: "Seconds to wait for a generated reply.")
+    var replyTimeout: Double = 30
+
+    @Option(name: .long, help: "Base seconds to sleep between full room sweeps.")
+    var loopDelay: Double = 3
+
+    @Option(name: .long, help: "Extra seconds to sleep after each sweep.")
+    var pollInterval: Double = 0
 
     @Option(name: .long, help: "LaunchAgent label.")
     var label: String = "com.ktok.bot"
@@ -70,7 +85,19 @@ struct BotInstallDaemonCommand: ParsableCommand {
         let stdoutURL = logsDir.appendingPathComponent("bot.out.log")
         let stderrURL = logsDir.appendingPathComponent("bot.err.log")
 
-        let arguments = [binary, "bot", "run", "--persona", persona, "--trigger-mode", triggerMode.rawValue, "--json"]
+        let arguments = [
+            binary,
+            "bot",
+            "run",
+            "--persona", persona,
+            "--trigger-mode", triggerMode.rawValue,
+            "--model", model,
+            "--reasoning-effort", reasoningEffort,
+            "--reply-timeout", "\(replyTimeout)",
+            "--loop-delay", "\(loopDelay)",
+            "--poll-interval", "\(pollInterval)",
+            "--json",
+        ]
         let plist = LaunchAgentSupport.plist(
             label: label,
             arguments: arguments,
@@ -131,6 +158,8 @@ enum BotTriggerMode: String, ExpressibleByArgument, CaseIterable {
     case persona
     /// Reply only to direct calls / mentions of the persona.
     case mention
+    /// Reply only to direct calls / mentions or configured greetings.
+    case greeting
     /// Reply to every new inbound message (excludes own outgoing messages).
     case all
     /// Never reply — detect only.
@@ -146,7 +175,7 @@ struct BotRunCommand: ParsableCommand {
     @Option(name: .long, help: "Persona name (loads ~/.ktok/persona/<name>.json).")
     var persona: String = "luna"
 
-    @Option(name: .long, help: "When to reply: persona | mention | all | off.")
+    @Option(name: .long, help: "When to reply: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
 
     @Option(name: .long, help: "Codex model for reply generation.")
@@ -396,15 +425,17 @@ struct BotRunCommand: ParsableCommand {
             return
         }
 
-        let generated = generator.generate(
+        let generatedReply = generator.generate(
             persona: persona,
             trigger: message,
             recentMessages: runtime.recentMessages,
             systemPreamble: Self.operationPreamble
-        ) ?? persona.fallbackReply(for: message)
+        )
+        let generated = generatedReply ?? persona.fallbackReply(for: message)
         let reply = persona.boundReply(generated)
+        let replySource = generatedReply == nil ? "fallback" : "codex"
 
-        emit(["event": "reply_ready", "room": runtime.title, "reason": reason, "reply": reply])
+        emit(["event": "reply_ready", "room": runtime.title, "reason": reason, "source": replySource, "reply": reply])
 
         if dryRun {
             try? MonitorStateStore.recordReply(db: db, monitorID: runtime.monitorID, messageKey: key, reply: reply, status: "dry_run", error: nil)
@@ -449,6 +480,14 @@ struct BotRunCommand: ParsableCommand {
         case .mention:
             if isOwnOrEmpty(message, sentBodies: sentBodies) { return (false, "self-or-empty") }
             return persona.isDirectCall(message) ? (true, "direct-call") : (false, "not-mention")
+        case .greeting:
+            let body = normalizeBody(message.body)
+            if body.isEmpty { return (false, "empty") }
+            if sentBodies.contains(body) { return (false, "sent-body") }
+            if persona.isDirectCall(message) { return (true, "direct-call") }
+            if message.author == nil || message.author == "(me)" { return (false, "self") }
+            if persona.isGreeting(message) { return (true, "greeting") }
+            return (false, "not-greeting-or-mention")
         case .all:
             if isOwnOrEmpty(message, sentBodies: sentBodies) { return (false, "self-or-empty") }
             return (true, "all")
@@ -485,12 +524,10 @@ struct BotRunCommand: ParsableCommand {
 
     private func emit(_ payload: [String: String]) {
         if json {
-            var withEvent = payload
-            if let data = try? JSONSerialization.data(withJSONObject: withEvent, options: [.sortedKeys, .withoutEscapingSlashes]),
+            if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .withoutEscapingSlashes]),
                let line = String(data: data, encoding: .utf8) {
                 print(line)
             }
-            _ = withEvent
         } else {
             let event = payload["event"] ?? "event"
             let rest = payload.filter { $0.key != "event" }

@@ -175,6 +175,7 @@ The MCP server exposes 12 tools:
 ## Documentation
 
 - [docs/CLI.md](docs/CLI.md): complete CLI reference.
+- [docs/BOT_ONBOARDING.md](docs/BOT_ONBOARDING.md): bot LaunchAgent, Codex, and troubleshooting runbook.
 - [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md): shared workspace rules for other services.
 - [docs/SERVICE_INTEGRATION.md](docs/SERVICE_INTEGRATION.md): compatibility pointer to the Dev Guide.
 
