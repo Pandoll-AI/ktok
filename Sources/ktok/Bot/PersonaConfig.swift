@@ -23,7 +23,11 @@ struct PersonaConfig: Codable, Equatable {
     var excludedNames: [String]
     var triggers: Triggers
     var fallbackReplies: FallbackReplies
+    /// Optional: preferred default bot room by stable chat_id (checked before title).
+    /// Must resolve to a monitored `self_control` room when used as the default.
+    var selfChatId: String?
     /// Optional: the user's own self-chat room title (used only as a convenience default).
+    /// Must resolve to a monitored `self_control` room when used as the default.
     var selfChatTitle: String?
 
     struct Triggers: Codable, Equatable {
@@ -62,6 +66,7 @@ struct PersonaConfig: Codable, Equatable {
         case excludedNames = "excluded_names"
         case triggers
         case fallbackReplies = "fallback_replies"
+        case selfChatId = "self_chat_id"
         case selfChatTitle = "self_chat_title"
     }
 }
@@ -127,6 +132,7 @@ extension PersonaConfig {
                 greeting: nil,
                 default: "네, 말씀해 주세요. 제가 도와드릴게요."
             ),
+            selfChatId: nil,
             selfChatTitle: nil
         )
     }

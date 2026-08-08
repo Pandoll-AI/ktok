@@ -20,5 +20,6 @@
     "greeting": "<short greeting line>",
     "default": "<short default line when the LLM is unavailable>"
   },
+  "self_chat_id": "<your own self-chat room chat_id (optional; preferred over title)>",
   "self_chat_title": "<your own self-chat room title (optional)>"
 }

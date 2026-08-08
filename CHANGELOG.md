@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Changed — Default bot room fail-closed + legacy monitor inactive (2026-08-08)
+
+- `ktok bot` default room selection is fail-closed with priority:
+  1. explicit `--chat` / `--chat-id`
+  2. persona `self_chat_id` (must be monitored + `self_control`)
+  3. persona `self_chat_title` (must be monitored + `self_control`)
+  4. exactly one monitored `self_control` room
+- Multi-room operation requires explicit `--all-monitored`. `--chat`, `--chat-id`, and `--all-monitored` are mutually exclusive.
+- Persona schema adds optional `self_chat_id` (checked before `self_chat_title`). Placeholder example updated in `persona.example.json` / `docs/PERSONA_SETUP.md` (no private values).
+- Room selection and mutual-exclusion validation run before Accessibility/KakaoTalk so misconfiguration fails offline.
+- Before opening a room by title, the bot re-checks that the title still maps only to the selected `chat_id` (collision / stale map protection).
+- `ktok bot install-daemon` propagates `--chat` / `--chat-id` / `--all-monitored` into LaunchAgent `ProgramArguments`; live install validates room selection; `--dry-run` prints the plist without live resolution.
+- **Legacy `ktok monitor` is inactive by design**: fails closed before opening KakaoTalk or sending. Reactivation is backlogged until a Swift-native `kakaotalk-db` reader replaces the Accessibility/UI path (`docs/BACKLOG.md`).
+- Docs updated: README, `docs/CLI.md`, `docs/BOT_ONBOARDING.md`, `docs/PERSONA_SETUP.md`, `docs/BACKLOG.md`. Prefer `ktok bot` for always-on persona operation.
+
 ### Fixed — Bot LaunchAgent/Codex onboarding and trigger hardening (2026-07-04)
 
 - `CodexReplyGenerator`가 `codex` 실행 파일을 찾을 때 `KTOK_CODEX_PATH`, `PATH`, `~/.local/bin/codex`, Homebrew/시스템 경로를 순서대로 확인하도록 수정했다. 비표준 설치 위치에서 LLM 생성이 실패해 persona fallback으로만 응답하던 문제를 방지한다.

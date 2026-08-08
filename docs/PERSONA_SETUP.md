@@ -43,7 +43,8 @@ If no file exists, a neutral default persona is used automatically.
 | `triggers.direct_call` | Call names/mentions that always trigger a reply. |
 | `triggers.greeting` / `empathy` / `question` / `profile` / `search` | Vocabulary that triggers a reply in `--trigger-mode persona`. |
 | `fallback_replies.*` | Canned lines used only when the LLM is unavailable. `default` is required. |
-| `self_chat_title` | Your own self-chat room title (optional convenience). |
+| `self_chat_id` | Preferred default bot room by stable chat ID (optional). Checked before `self_chat_title`. Must resolve to a monitored `self_control` room when used as the default. |
+| `self_chat_title` | Your own self-chat room title (optional convenience). Must resolve to a monitored `self_control` room when used as the default. |
 
 ## Writing the `system_prompt` (LLM-assisted)
 
@@ -65,6 +66,6 @@ as `\n` or keep it one logical block — `JSONEncoder`/editors handle this).
 
 - **Never put secrets** (API keys, passwords) in the persona file.
 - Keep real personal data minimal; prefer a fictional persona.
-- The bot auto-replies only in the persona's configured `self_chat_title` by default. If absent, exactly one monitored `self_control` room is required. Additional rooms require an explicit `--chat`, `--chat-id`, or `--all-monitored` selection.
+- The bot default room priority is fail-closed: explicit `--chat`/`--chat-id` override, then persona `self_chat_id`, then `self_chat_title`, then exactly one monitored `self_control` room. Persona defaults must resolve to a monitored `self_control` room. A single non-default room requires `--chat` or `--chat-id`; multi-room operation requires the explicit `--all-monitored` flag.
 - Test with your own self-chat first (`--dry-run`).
 - The persona file is private: confirm it is gitignored (`git check-ignore ~/.ktok/persona/<name>.json`).
