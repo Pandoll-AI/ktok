@@ -7,7 +7,8 @@ import Foundation
 struct MonitorCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "monitor",
-        abstract: "Monitor one KakaoTalk room and reply with a persona"
+        abstract: "Inactive: legacy UI monitor is disabled",
+        discussion: "The legacy Accessibility-based monitor is intentionally inactive. Reactivation is backlogged until the kakaotalk-db Python reader is replaced with a Swift implementation."
     )
 
     @Argument(help: "Chat room name to monitor")
@@ -62,6 +63,10 @@ struct MonitorCommand: ParsableCommand {
     }
 
     func run() throws {
+        throw ValidationError("ktok monitor is inactive. Reactivation is backlogged until kakaotalk-db Python is replaced with Swift.")
+    }
+
+    private func runLegacy() throws {
         guard AccessibilityPermission.ensureGranted() else {
             AccessibilityPermission.printInstructions()
             throw ExitCode.failure

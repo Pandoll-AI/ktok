@@ -23,12 +23,22 @@ identify a user.
   ktok persona path --name <persona>
   ```
 
-- The target room is allowlisted:
+- The default bot room is configured (fail-closed priority):
 
+  1. explicit `--chat` / `--chat-id` override, or
+  2. persona `self_chat_id` → monitored `self_control` room, or
+  3. persona `self_chat_title` → monitored `self_control` room, or
+  4. exactly one monitored room with `--mode self_control`.
+
+  If no default is configured, pass an explicit room override at run/install
+  time; the bot never silently expands to all monitored rooms.
   ```bash
-  ktok channel monitor add --title "<room-title>"
+  ktok channel monitor add --chat-id "<chat_id>" --mode self_control
   ktok channel monitor list
   ```
+
+  Multi-room operation requires explicit `--all-monitored`. Do not rely on the
+  legacy `ktok monitor` command; it is inactive (see `docs/BACKLOG.md`).
 
 - The Codex CLI can run in the same environment used by the bot.
 
@@ -69,13 +79,54 @@ OK
 If this fails, fix Codex authentication, the executable path, or the model name
 before debugging KakaoTalk or the bot database.
 
-## LaunchAgent Setup
+## Room selection
 
-Use `ktok bot install-daemon` for a persistent macOS LaunchAgent:
+Default single-room priority for both `bot run` and `install-daemon`:
+
+| Priority | Source | Requirement |
+| --- | --- | --- |
+| 1 | `--chat` or `--chat-id` | Explicit override; mutually exclusive with each other and with `--all-monitored` |
+| 2 | persona `self_chat_id` | Room must be monitored with mode `self_control` |
+| 3 | persona `self_chat_title` | Room must be monitored with mode `self_control` |
+| 4 | unique monitored `self_control` | Fail closed if zero or more than one |
 
 ```bash
+# Offline dry-run of room selection (fails without KakaoTalk if misconfigured)
+ktok bot run --persona <persona> --max-loops 1 --dry-run --json
+
+# Explicit room
+ktok bot run --persona <persona> --chat-id "<chat_id>" --json
+ktok bot run --persona <persona> --chat "<exact-title>" --json
+
+# Explicit multi-room opt-in
+ktok bot run --persona <persona> --all-monitored --json
+```
+
+Selection and mutual-exclusion checks run before Accessibility so operators can
+validate configuration offline.
+
+## LaunchAgent Setup
+
+Use `ktok bot install-daemon` for a persistent macOS LaunchAgent. Room, trigger,
+and model flags are propagated into `ProgramArguments` for `ktok bot run`:
+
+```bash
+# Preview the plist without writing or resolving rooms
 ktok bot install-daemon \
   --persona <persona> \
+  --chat-id "<chat_id>" \
+  --trigger-mode greeting \
+  --model gpt-5.4-mini \
+  --reasoning-effort low \
+  --reply-timeout 12 \
+  --loop-delay 0.5 \
+  --poll-interval 0 \
+  --label com.example.ktok.bot \
+  --dry-run
+
+ktok bot install-daemon \
+  --persona <persona> \
+  --chat-id "<chat_id>" \
   --trigger-mode greeting \
   --model gpt-5.4-mini \
   --reasoning-effort low \
@@ -85,6 +136,11 @@ ktok bot install-daemon \
   --label com.example.ktok.bot \
   --load
 ```
+
+Without `--chat` / `--chat-id` / `--all-monitored`, the daemon uses the same
+default room priority as `bot run` (persona `self_chat_id` → `self_chat_title` →
+unique `self_control`). Live install (without `--dry-run`) validates that
+selection before writing or loading the plist.
 
 The generated LaunchAgent sets `HOME`, `USER`, `PATH`, and
 `KTOK_NO_ACCESSIBILITY_PROMPT`. If `codex` is installed outside the generated
@@ -121,6 +177,9 @@ ktok status
 ktok whoami --json
 ktok persona validate --name <persona>
 ktok channel monitor list
+# Expect: inactive error; do not use legacy monitor for production
+ktok monitor "any-room" --persona <persona> ; true
+ktok bot run --persona <persona> --max-loops 1 --dry-run --json
 ktok read "<room-title>" --limit 5 --json --keep-window
 ```
 

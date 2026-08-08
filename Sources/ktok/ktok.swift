@@ -27,7 +27,7 @@ struct Ktok: ParsableCommand {
               ktok inputs save-text --account work --source cli --text "hello" --json
               ktok watch "채팅방"
               ktok watch "채팅방" --json
-              ktok monitor "채팅방" --persona luna
+              ktok bot run --persona luna
               ktok mcp-server
 
             Tip:

@@ -124,47 +124,54 @@ Attachment event:
 {"chat":"채팅방","event":"attachment","detected_at":"2026-05-29T10:00:03.000Z","attachment":{"attachment_id":"att_0123456789abcdef","chat":"채팅방","filename":"report.pdf","candidate_value":"report.pdf","row_index":42,"reason":"extension"}}
 ```
 
-## monitor
+## monitor (inactive)
 
 ```bash
-ktok monitor "채팅방" --persona luna
-ktok monitor "채팅방" --persona luna --json
-ktok monitor "채팅방" --persona luna --dry-run
+ktok monitor "채팅방" --persona luna   # fails closed; does not open KakaoTalk or send
 ```
 
-`monitor` opens one target room, keeps reading only that fixed room, and sends replies through the same chat window. This is intended for low-latency room-specific agent operation.
+The legacy Accessibility-based `ktok monitor` is **inactive by design**. It exits
+with a validation error before opening KakaoTalk or sending anything.
+Reactivation is backlogged until the `kakaotalk-db` Python reader is replaced
+with a Swift-native implementation; see `docs/BACKLOG.md`.
 
-Options:
-
-| Option | Meaning |
-| --- | --- |
-| `--persona <name>` | Persona to use. Currently supported: `luna`. |
-| `--poll-interval <seconds>` | Optional extra sleep after each monitor poll. Default `0`; read time itself naturally throttles the loop. |
-| `--model <model>` | Codex model for reply generation. |
-| `--reasoning-effort <value>` | Codex reasoning effort config value. |
-| `--reply-timeout <seconds>` | Maximum wait for a generated reply. |
-| `--heartbeat-interval <seconds>` | Emit a monitor heartbeat while the fixed-room loop is alive. Use `0` to disable. |
-| `--snapshot-limit <count>` | Visible message count retained for context. Default `8`. |
-| `--trace-ax` | Print Accessibility trace. |
-| `--deep-recovery` | Use slower recovery when the room window becomes stale. |
-| `--dry-run` | Decide and log replies without sending. |
-| `--json` | Emit monitor events as JSONL. |
-
-Persona identity/voice is loaded from `~/.ktok/persona/<name>.json` (see the `persona` command and `docs/PERSONA_SETUP.md`); a neutral default is used when no file exists.
+Prefer `ktok bot` for always-on persona replies. Historical option flags remain
+in the command definition for future reactivation but have no active runtime
+effect while inactive.
 
 ## bot
 
-An always-on background chatbot over the **allowlisted** rooms (`ktok channel monitor add`). Replies focus-free (KakaoTalk stays in the background) and keeps the Mac awake while running.
+An always-on background chatbot for a **fail-closed** default room (or an
+explicit multi-room override). Replies are focus-free (KakaoTalk stays in the
+background) and the Mac stays awake while the bot is running.
+
+Default room priority (single-room path):
+
+1. explicit `--chat` / `--chat-id`
+2. persona `self_chat_id` (must be monitored + `self_control`)
+3. persona `self_chat_title` (must be monitored + `self_control`)
+4. exactly one monitored `self_control` room
+
+`--all-monitored` is an explicit multi-room opt-in and is incompatible with
+`--chat` / `--chat-id`. `--chat` and `--chat-id` are mutually exclusive.
 
 ```bash
-ktok channel monitor add --title "<room>"       # allowlist a room first
-ktok bot run --persona luna                      # foreground/background loop
+# Mark the default self-chat as the unique self_control room
+ktok channel monitor add --chat-id '<chat_id>' --mode self_control
+
+ktok bot run --persona luna                              # default room path
+ktok bot run --persona luna --chat-id '<chat_id>'        # explicit room
+ktok bot run --persona luna --chat "<exact title>"       # explicit title
+ktok bot run --persona luna --all-monitored              # every monitored room
 ktok bot run --persona luna --trigger-mode greeting --json
 ktok bot run --persona luna --dry-run --max-loops 3 --json
-ktok bot install-daemon --persona luna --load    # optional LaunchAgent
+ktok bot install-daemon --persona luna --chat-id '<chat_id>' --load
+ktok bot install-daemon --persona luna --dry-run         # print plist only
 ```
 
-Dev machine: `ktok bot run --persona luna --json >> ~/.ktok/bot/logs/bot.log 2>&1 &` (no daemon needed).
+Dev machine: `ktok bot run --persona luna --json >> ~/.ktok/bot/logs/bot.log 2>&1 &`
+(no daemon needed). Room selection and mutual-exclusion validation run **before**
+Accessibility/KakaoTalk so misconfiguration fails offline.
 
 For persistent operation, Codex setup, LaunchAgent environment, and
 troubleshooting, see `docs/BOT_ONBOARDING.md`.
@@ -174,20 +181,34 @@ Options:
 | Option | Meaning |
 | --- | --- |
 | `--persona <name>` | Persona config (`~/.ktok/persona/<name>.json`). |
+| `--chat <title>` | Exact chat title override (mutually exclusive with `--chat-id` and `--all-monitored`). |
+| `--chat-id <id>` | Exact chat ID override (mutually exclusive with `--chat` and `--all-monitored`). |
+| `--all-monitored` | Use every monitored room (explicit multi-room opt-in). |
 | `--trigger-mode <mode>` | `persona` (default, decision gating) / `mention` (direct calls only) / `greeting` (direct calls or configured greetings only) / `all` (every new message) / `off` (detect only). |
 | `--model` / `--reasoning-effort` / `--reply-timeout` | Codex model (default `gpt-5.4-mini`), effort (default `medium`), reply timeout. |
 | `--loop-delay` / `--poll-interval` | Base and extra sleep between room sweeps. |
 | `--snapshot-limit` / `--heartbeat-interval` | Context size / heartbeat cadence. |
-| `--dry-run` | Decide and log replies without sending. |
+| `--dry-run` | Decide and log replies without sending. (`install-daemon --dry-run` prints the plist and skips live room resolution.) |
 | `--no-caffeine` | Allow the Mac to sleep (default keeps it awake). |
 | `--max-loops <n>` | Stop after N sweeps (0 = forever). |
 | `--deep-recovery` / `--trace-ax` / `--json` | Recovery / trace / JSONL output. |
 
-Safety: only allowlisted rooms are ever answered; the bot never replies to its own outgoing messages; if a reply is unsafe/unclear it outputs `SKIP`.
+`install-daemon` accepts the same room/trigger/model options and propagates them
+into the LaunchAgent `ProgramArguments` for `ktok bot run`. Use `--load` to
+bootstrap the agent into the current Aqua GUI session.
+
+Safety: default path only uses a monitored `self_control` room (via persona
+`self_chat_id` / `self_chat_title` or a unique self_control mark); multi-room
+requires `--all-monitored`; the bot never replies to its own outgoing messages;
+if a reply is unsafe/unclear it outputs `SKIP`. Before opening a room by title,
+the bot re-checks that the channel map still maps only to the selected `chat_id`.
+The current KakaoTalk AX resolver still opens by exact title, so a same-title UI
+window outside the channel map remains a residual risk; do not treat a title as
+a substitute for a stable chat ID.
 
 Codex must be discoverable via `KTOK_CODEX_PATH`, `PATH`, or a standard install
 location. If reply logs show `source=fallback`, verify Codex before debugging
-KakaoTalk or the monitor database.
+KakaoTalk or the bot seen/reply database.
 
 ## persona
 

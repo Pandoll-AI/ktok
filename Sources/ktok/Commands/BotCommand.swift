@@ -4,17 +4,25 @@ import Foundation
 
 /// Always-on background persona chatbot.
 ///
-/// Watches the allowlisted KakaoTalk rooms (`ktok channel monitor add`) for new
-/// messages and replies as a persona via the `codex` LLM. Replies are delivered
-/// focus-free (KakaoTalk is never brought to the foreground). Only allowlisted
-/// rooms are ever answered; brand-new/unlisted rooms are ignored for safety.
+/// Watches the configured KakaoTalk room for new messages and replies as a
+/// persona via the `codex` LLM. Replies are delivered focus-free (KakaoTalk is
+/// never brought to the foreground). Default room selection is fail-closed:
+/// explicit `--chat`/`--chat-id`, then persona `self_chat_id`, then persona
+/// `self_chat_title`, then exactly one monitored `self_control` room.
+/// Additional rooms require explicit `--all-monitored`.
 struct BotCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bot",
-        abstract: "Run an always-on persona chatbot over allowlisted KakaoTalk rooms",
+        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room.",
         discussion: """
-            The bot only replies in rooms you allowlist with:
-              ktok channel monitor add --title "<room>"
+            Default room priority (fail-closed):
+              1. explicit --chat / --chat-id
+              2. persona self_chat_id (must be monitored + self_control)
+              3. persona self_chat_title (must be monitored + self_control)
+              4. exactly one monitored self_control room
+
+            Use --all-monitored only as an explicit multi-room override.
+            Default trigger mode is persona (proactive; does not require @).
 
             Persona identity/voice comes from ~/.ktok/persona/<name>.json
             (see 'ktok persona init' and docs/PERSONA_SETUP.md). Replies are sent
@@ -41,6 +49,15 @@ struct BotInstallDaemonCommand: ParsableCommand {
 
     @Option(name: .long, help: "Persona name.")
     var persona: String = "luna"
+
+    @Option(name: .long, help: "Exact chat title override. Omit to use persona self_chat_id/self_chat_title or the unique self_control room.")
+    var chat: String?
+
+    @Option(name: .customLong("chat-id"), help: "Exact chat ID override. Omit to use persona self_chat_id/self_chat_title or the unique self_control room.")
+    var chatID: String?
+
+    @Flag(name: .long, help: "Use every monitored room. Explicit opt-in; incompatible with a room override.")
+    var allMonitored: Bool = false
 
     @Option(name: .long, help: "Reply trigger mode: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
@@ -69,11 +86,15 @@ struct BotInstallDaemonCommand: ParsableCommand {
     @Flag(name: .long, help: "Immediately bootstrap/kickstart the LaunchAgent after writing the plist.")
     var load: Bool = false
 
-    @Flag(name: .long, help: "Print the plist without writing or loading it.")
+    @Flag(name: .long, help: "Print the plist without writing or loading it. Skips live room resolution.")
     var dryRun: Bool = false
 
     @Flag(name: .long, help: "Emit JSON.")
     var json: Bool = false
+
+    func validate() throws {
+        try BotRoomSelector.validateFlags(chat: chat, chatID: chatID, allMonitored: allMonitored)
+    }
 
     func run() throws {
         let fileManager = FileManager.default
@@ -98,18 +119,41 @@ struct BotInstallDaemonCommand: ParsableCommand {
             "--poll-interval", "\(pollInterval)",
             "--json",
         ]
+        var selectedRoomArguments = arguments
+        if let chat {
+            selectedRoomArguments += ["--chat", chat]
+        }
+        if let chatID {
+            selectedRoomArguments += ["--chat-id", chatID]
+        }
+        if allMonitored {
+            selectedRoomArguments += ["--all-monitored"]
+        }
         let plist = LaunchAgentSupport.plist(
             label: label,
-            arguments: arguments,
+            arguments: selectedRoomArguments,
             workingDirectory: home.path,
             standardOutPath: stdoutURL.path,
             standardErrorPath: stderrURL.path
         )
 
+        // Dry-run only prints the would-be plist; live room resolution is
+        // intentionally skipped so operators can inspect flags offline.
         if dryRun {
             print(plist)
             return
         }
+
+        // Validate the selected default/explicit room before writing or loading.
+        let personaConfig = try PersonaConfig.load(name: persona)
+        let channelStore = try ChannelStore()
+        _ = try BotRoomSelector.selectRooms(
+            store: channelStore,
+            persona: personaConfig,
+            chat: chat,
+            chatID: chatID,
+            allMonitored: allMonitored
+        )
 
         try fileManager.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: logsDir, withIntermediateDirectories: true)
@@ -169,7 +213,7 @@ enum BotTriggerMode: String, ExpressibleByArgument, CaseIterable {
 struct BotRunCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Run the bot loop over allowlisted rooms."
+        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room."
     )
 
     @Option(name: .long, help: "Persona name (loads ~/.ktok/persona/<name>.json).")
@@ -177,6 +221,15 @@ struct BotRunCommand: ParsableCommand {
 
     @Option(name: .long, help: "When to reply: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
+
+    @Option(name: .long, help: "Exact chat title override. Omit to use persona self_chat_id/self_chat_title or the unique self_control room.")
+    var chat: String?
+
+    @Option(name: .customLong("chat-id"), help: "Exact chat ID override. Omit to use persona self_chat_id/self_chat_title or the unique self_control room.")
+    var chatID: String?
+
+    @Flag(name: .long, help: "Use every monitored room. Explicit opt-in; incompatible with a room override.")
+    var allMonitored: Bool = false
 
     @Option(name: .long, help: "Codex model for reply generation.")
     var model: String = "gpt-5.4-mini"
@@ -221,25 +274,45 @@ struct BotRunCommand: ParsableCommand {
         if persona.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("Persona name is required.")
         }
+        try BotRoomSelector.validateFlags(chat: chat, chatID: chatID, allMonitored: allMonitored)
     }
 
     func run() throws {
+        // Resolve rooms before Accessibility/KakaoTalk so selection failures
+        // stay offline and fail closed without touching UI.
+        let channelStore = try ChannelStore()
+        let personaConfig = try Persona.load(named: persona)
+        let rooms = try BotRoomSelector.selectRooms(
+            store: channelStore,
+            persona: personaConfig.config,
+            chat: chat,
+            chatID: chatID,
+            allMonitored: allMonitored
+        )
+
+        // Validate every selected title→chat_id mapping before touching
+        // Accessibility/KakaoTalk. The runtime re-checks before each window
+        // open as well, protecting against map changes during a long run.
+        for room in rooms {
+            try BotRoomSelector.verifyTitleMapsToChatID(
+                store: channelStore,
+                title: room.title,
+                chatID: room.chatID
+            )
+        }
+        emit([
+            "event": "rooms_selected",
+            "rooms": rooms.map(\.title).joined(separator: ", "),
+            "chat_ids": rooms.map(\.chatID).joined(separator: ", "),
+            "room_count": "\(rooms.count)",
+        ])
+
         guard AccessibilityPermission.ensureGranted() else {
             AccessibilityPermission.printInstructions()
             throw ExitCode.failure
         }
 
-        let personaConfig = try Persona.load(named: persona)
         let alias = KtokPaths.activeAccountAlias() ?? "unknown"
-
-        let rooms = try ChannelStore().monitoredChats()
-        guard !rooms.isEmpty else {
-            emit([
-                "event": "no_monitored_rooms",
-                "hint": "Add rooms with: ktok channel monitor add --title \"<room>\"",
-            ])
-            return
-        }
 
         // Caffeine mode: keep the system awake so the background bot never
         // misses messages while the Mac is idle. Native power assertion (no
@@ -270,7 +343,7 @@ struct BotRunCommand: ParsableCommand {
         for room in rooms {
             let monitorID = MonitorStateStore.monitorID(accountAlias: alias, chatTitle: room.title, persona: personaConfig.name)
             let seeded = (try? MonitorStateStore.recentSentBodies(db: db, monitorID: monitorID, limit: 40)) ?? []
-            runtimes.append(RoomRuntime(title: room.title, monitorID: monitorID, sentBodies: Set(seeded)))
+            runtimes.append(RoomRuntime(chatID: room.chatID, title: room.title, monitorID: monitorID, sentBodies: Set(seeded)))
         }
 
         emit([
@@ -278,6 +351,7 @@ struct BotRunCommand: ParsableCommand {
             "persona": personaConfig.name,
             "trigger_mode": triggerMode.rawValue,
             "rooms": rooms.map(\.title).joined(separator: ", "),
+            "chat_ids": rooms.map(\.chatID).joined(separator: ", "),
             "room_count": "\(rooms.count)",
             "dry_run": dryRun ? "true" : "false",
             "caffeine": noCaffeine ? "off" : "on",
@@ -290,6 +364,7 @@ struct BotRunCommand: ParsableCommand {
             for runtime in runtimes {
                 processRoom(
                     runtime,
+                    channelStore: channelStore,
                     db: db,
                     resolver: resolver,
                     reader: reader,
@@ -317,6 +392,7 @@ struct BotRunCommand: ParsableCommand {
 
     private func processRoom(
         _ runtime: RoomRuntime,
+        channelStore: ChannelStore,
         db: Database,
         resolver: ChatWindowResolver,
         reader: KakaoTalkTranscriptReader,
@@ -329,12 +405,24 @@ struct BotRunCommand: ParsableCommand {
     ) {
         // Resolve/open the room window (kept open across sweeps so re-reads are
         // warm and focus-free). Re-resolve if a prior read invalidated it.
+        // Always re-check title→chat_id before opening so collisions cannot
+        // deliver to a wrong room.
         if runtime.window == nil {
             do {
+                try BotRoomSelector.verifyTitleMapsToChatID(
+                    store: channelStore,
+                    title: runtime.title,
+                    chatID: runtime.chatID
+                )
                 let resolution = try resolver.resolve(query: runtime.title)
                 runtime.window = resolution.window
             } catch {
-                emit(["event": "resolve_failed", "room": runtime.title, "error": "\(error)"])
+                emit([
+                    "event": "resolve_failed",
+                    "room": runtime.title,
+                    "chat_id": runtime.chatID,
+                    "error": "\(error)",
+                ])
                 return
             }
         }
@@ -365,7 +453,12 @@ struct BotRunCommand: ParsableCommand {
                 includeAttachments: false
             )
         } catch {
-            emit(["event": "read_failed", "room": runtime.title, "error": "\(error)"])
+            emit([
+                "event": "read_failed",
+                "room": runtime.title,
+                "chat_id": runtime.chatID,
+                "error": "\(error)",
+            ])
             runtime.window = nil // force re-resolve next sweep
             return
         }
@@ -418,6 +511,7 @@ struct BotRunCommand: ParsableCommand {
             emit([
                 "event": "skip",
                 "room": runtime.title,
+                "chat_id": runtime.chatID,
                 "reason": reason,
                 "author": message.author ?? "(me)",
                 "body": persona.logSnippet(message.body),
@@ -435,7 +529,14 @@ struct BotRunCommand: ParsableCommand {
         let reply = persona.boundReply(generated)
         let replySource = generatedReply == nil ? "fallback" : "codex"
 
-        emit(["event": "reply_ready", "room": runtime.title, "reason": reason, "source": replySource, "reply": reply])
+        emit([
+            "event": "reply_ready",
+            "room": runtime.title,
+            "chat_id": runtime.chatID,
+            "reason": reason,
+            "source": replySource,
+            "reply": reply,
+        ])
 
         if dryRun {
             try? MonitorStateStore.recordReply(db: db, monitorID: runtime.monitorID, messageKey: key, reply: reply, status: "dry_run", error: nil)
@@ -446,10 +547,10 @@ struct BotRunCommand: ParsableCommand {
         if sent {
             runtime.sentBodies.insert(normalizeBody(reply))
             try? MonitorStateStore.recordReply(db: db, monitorID: runtime.monitorID, messageKey: key, reply: reply, status: "sent", error: nil)
-            emit(["event": "sent", "room": runtime.title, "reply": reply])
+            emit(["event": "sent", "room": runtime.title, "chat_id": runtime.chatID, "reply": reply])
         } else {
             try? MonitorStateStore.recordReply(db: db, monitorID: runtime.monitorID, messageKey: key, reply: reply, status: "failed", error: "send_unverified")
-            emit(["event": "send_failed", "room": runtime.title])
+            emit(["event": "send_failed", "room": runtime.title, "chat_id": runtime.chatID])
         }
     }
 
@@ -513,11 +614,12 @@ struct BotRunCommand: ParsableCommand {
 
     static let operationPreamble: String = """
     You are operating as an always-on background reply bot for the room owner.
-    You only see rooms the owner explicitly allowlisted, and the runtime has
-    already selected the single new message to answer. Reply only to that trigger
-    as the persona defined below; never answer unrelated older messages, and never
-    reply to your own outgoing messages. Keep the reply to one short KakaoTalk
-    message. If replying is unsafe, unclear, or unnecessary, output exactly SKIP.
+    You only see the configured default room or rooms explicitly selected by the
+    owner, and the runtime has already selected the single new message to answer.
+    Reply only to that trigger as the persona defined below; never answer
+    unrelated older messages, and never reply to your own outgoing messages.
+    Keep the reply to one short KakaoTalk message. If replying is unsafe, unclear,
+    or unnecessary, output exactly SKIP.
     """
 
     // MARK: - Event output
@@ -543,6 +645,7 @@ struct BotRunCommand: ParsableCommand {
 
 /// Mutable per-room runtime state for the bot loop.
 private final class RoomRuntime {
+    let chatID: String
     let title: String
     let monitorID: String
     var window: UIElement?
@@ -551,7 +654,8 @@ private final class RoomRuntime {
     var sentBodies: Set<String>
     var baselineDone: Bool
 
-    init(title: String, monitorID: String, sentBodies: Set<String>) {
+    init(chatID: String, title: String, monitorID: String, sentBodies: Set<String>) {
+        self.chatID = chatID
         self.title = title
         self.monitorID = monitorID
         self.window = nil

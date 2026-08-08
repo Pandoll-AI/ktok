@@ -15,7 +15,8 @@ ktok login work
 ktok chats --json
 ktok read "채팅방" --json
 ktok watch "채팅방" --json
-ktok monitor "채팅방" --persona luna
+ktok channel monitor add --chat-id '<chat_id>' --mode self_control
+ktok bot run --persona luna --dry-run --max-loops 1 --json
 ktok inputs save-text --account work --source my-service --text "hello" --json
 ktok inputs save-file --account work --source my-service /path/to/file.pdf --json
 ktok storage paths --account work --chat "채팅방" --json
@@ -49,16 +50,30 @@ ktok mcp-server
 
 By default, `read` and `watch` also record observed message/attachment events into the shared workspace. Use `--no-record-events` to disable recording for a run.
 
-`monitor` opens one room once, keeps watching that fixed room, and replies only when the configured persona should respond:
+## Bot (always-on persona)
+
+Use `ktok bot` for always-on persona replies. Room selection is **fail-closed**:
+
+1. explicit `--chat` / `--chat-id`
+2. persona `self_chat_id` (must be monitored + `self_control`)
+3. persona `self_chat_title` (must be monitored + `self_control`)
+4. exactly one monitored `self_control` room
+
+Additional rooms require explicit `--all-monitored`. Default trigger mode is `persona` (proactive; does not require `@`).
 
 ```bash
 ktok assume work
-ktok monitor "채팅방" --persona luna
+ktok channel monitor add --chat-id '<chat_id>' --mode self_control
+ktok bot run --persona luna --dry-run --max-loops 1 --json
+ktok bot run --persona luna --chat-id '<chat_id>' --json
+ktok bot install-daemon --persona luna --chat-id '<chat_id>' --load
 ```
 
-The `luna` persona replies to direct calls such as `루나` or `비서야`, general greetings, and warm-empathy cues. It does not treat `친구` or `지인` as Luna. Monitor state is kept in the active account SQLite database under `~/.ktok/accounts/<alias>/history.sqlite`.
+Bot seen/reply state is kept in the active account SQLite database under `~/.ktok/accounts/<alias>/history.sqlite`. For LaunchAgent, Codex, and troubleshooting, see [docs/BOT_ONBOARDING.md](docs/BOT_ONBOARDING.md).
 
-If monitor read recovery fails repeatedly, it logs the failed phase and restarts itself with the same arguments. Use `--restart-after-read-failures 0` only when you want to disable that recovery behavior.
+## Legacy `ktok monitor` (inactive)
+
+`ktok monitor` is **inactive by design**. It fails closed before opening KakaoTalk or sending anything. Reactivation is backlogged until the Accessibility/UI reader is replaced with a Swift-native `kakaotalk-db` reader; see [docs/BACKLOG.md](docs/BACKLOG.md). Prefer `ktok bot` for always-on persona operation.
 
 ## Shared Workspace
 
@@ -176,6 +191,8 @@ The MCP server exposes 12 tools:
 
 - [docs/CLI.md](docs/CLI.md): complete CLI reference.
 - [docs/BOT_ONBOARDING.md](docs/BOT_ONBOARDING.md): bot LaunchAgent, Codex, and troubleshooting runbook.
+- [docs/PERSONA_SETUP.md](docs/PERSONA_SETUP.md): persona schema (`self_chat_id` / `self_chat_title`) and safety rules.
+- [docs/BACKLOG.md](docs/BACKLOG.md): inactive legacy `monitor` and reactivation criteria.
 - [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md): shared workspace rules for other services.
 - [docs/SERVICE_INTEGRATION.md](docs/SERVICE_INTEGRATION.md): compatibility pointer to the Dev Guide.
 
@@ -187,4 +204,6 @@ swift build -c release
 git diff --check
 KTOK_HOME=/tmp/ktok-home-test ktok storage paths --json
 KTOK_HOME=/tmp/ktok-home-test ktok inputs save-text --account work --source test --text "hello" --json
+# Offline bot room selector / monitor-inactive / daemon-arg checks (no KakaoTalk UI)
+./scripts/test-bot-room-selector.sh
 ```
