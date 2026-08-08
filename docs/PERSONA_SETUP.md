@@ -1,9 +1,13 @@
 # Persona Setup
 
-`ktok monitor` and `ktok bot` reply using a **persona** whose identity, voice, and
+`ktok bot` replies using a **persona** whose identity, voice, and
 trigger vocabulary are defined in a user-owned config file. **No persona content
 ships in source** — the repository only contains a neutral, name-free default, so
 a clean checkout never leaks private names, room titles, or biography.
+
+The legacy `ktok monitor` command is currently inactive. Its reactivation is
+backlogged until the Accessibility/UI reader is replaced with a Swift-native
+`kakaotalk-db` reader.
 
 ## Where the config lives
 
@@ -61,6 +65,6 @@ as `\n` or keep it one logical block — `JSONEncoder`/editors handle this).
 
 - **Never put secrets** (API keys, passwords) in the persona file.
 - Keep real personal data minimal; prefer a fictional persona.
-- The bot only auto-replies in **allowlisted rooms** (`ktok channel monitor add`).
+- The bot auto-replies only in the persona's configured `self_chat_title` by default. If absent, exactly one monitored `self_control` room is required. Additional rooms require an explicit `--chat`, `--chat-id`, or `--all-monitored` selection.
 - Test with your own self-chat first (`--dry-run`).
 - The persona file is private: confirm it is gitignored (`git check-ignore ~/.ktok/persona/<name>.json`).

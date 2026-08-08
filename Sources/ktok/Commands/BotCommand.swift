@@ -4,17 +4,19 @@ import Foundation
 
 /// Always-on background persona chatbot.
 ///
-/// Watches the allowlisted KakaoTalk rooms (`ktok channel monitor add`) for new
-/// messages and replies as a persona via the `codex` LLM. Replies are delivered
-/// focus-free (KakaoTalk is never brought to the foreground). Only allowlisted
-/// rooms are ever answered; brand-new/unlisted rooms are ignored for safety.
+/// Watches the configured KakaoTalk room for new messages and replies as a
+/// persona via the `codex` LLM. Replies are delivered focus-free (KakaoTalk is
+/// never brought to the foreground). By default, exactly one monitored room
+/// marked `self_control` is used; additional rooms require explicit selection.
 struct BotCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bot",
-        abstract: "Run an always-on persona chatbot over allowlisted KakaoTalk rooms",
+        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room.",
         discussion: """
-            The bot only replies in rooms you allowlist with:
-              ktok channel monitor add --title "<room>"
+            The default bot room is `self_chat_title` from the persona config.
+            If it is absent, exactly one monitored room marked `--mode
+            self_control` is required. Use `--chat` or `--chat-id` to select a
+            room explicitly, or `--all-monitored` as an explicit multi-room override.
 
             Persona identity/voice comes from ~/.ktok/persona/<name>.json
             (see 'ktok persona init' and docs/PERSONA_SETUP.md). Replies are sent
@@ -41,6 +43,15 @@ struct BotInstallDaemonCommand: ParsableCommand {
 
     @Option(name: .long, help: "Persona name.")
     var persona: String = "luna"
+
+    @Option(name: .long, help: "Exact chat title override. Omit to use persona self_chat_title or the unique self_control room.")
+    var chat: String?
+
+    @Option(name: .customLong("chat-id"), help: "Exact chat ID override. Omit to use persona self_chat_title or the unique self_control room.")
+    var chatID: String?
+
+    @Flag(name: .long, help: "Use every monitored room. Explicit opt-in; incompatible with a room override.")
+    var allMonitored: Bool = false
 
     @Option(name: .long, help: "Reply trigger mode: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
@@ -75,6 +86,10 @@ struct BotInstallDaemonCommand: ParsableCommand {
     @Flag(name: .long, help: "Emit JSON.")
     var json: Bool = false
 
+    func validate() throws {
+        try validateRoomSelection(chat: chat, chatID: chatID, allMonitored: allMonitored)
+    }
+
     func run() throws {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
@@ -98,9 +113,19 @@ struct BotInstallDaemonCommand: ParsableCommand {
             "--poll-interval", "\(pollInterval)",
             "--json",
         ]
+        var selectedRoomArguments = arguments
+        if let chat {
+            selectedRoomArguments += ["--chat", chat]
+        }
+        if let chatID {
+            selectedRoomArguments += ["--chat-id", chatID]
+        }
+        if allMonitored {
+            selectedRoomArguments += ["--all-monitored"]
+        }
         let plist = LaunchAgentSupport.plist(
             label: label,
-            arguments: arguments,
+            arguments: selectedRoomArguments,
             workingDirectory: home.path,
             standardOutPath: stdoutURL.path,
             standardErrorPath: stderrURL.path
@@ -169,7 +194,7 @@ enum BotTriggerMode: String, ExpressibleByArgument, CaseIterable {
 struct BotRunCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Run the bot loop over allowlisted rooms."
+        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room.",
     )
 
     @Option(name: .long, help: "Persona name (loads ~/.ktok/persona/<name>.json).")
@@ -177,6 +202,15 @@ struct BotRunCommand: ParsableCommand {
 
     @Option(name: .long, help: "When to reply: persona | mention | greeting | all | off.")
     var triggerMode: BotTriggerMode = .persona
+
+    @Option(name: .long, help: "Exact chat title override. Omit to use persona self_chat_title or the unique self_control room.")
+    var chat: String?
+
+    @Option(name: .customLong("chat-id"), help: "Exact chat ID override. Omit to use persona self_chat_title or the unique self_control room.")
+    var chatID: String?
+
+    @Flag(name: .long, help: "Use every monitored room. Explicit opt-in; incompatible with a room override.")
+    var allMonitored: Bool = false
 
     @Option(name: .long, help: "Codex model for reply generation.")
     var model: String = "gpt-5.4-mini"
@@ -221,9 +255,12 @@ struct BotRunCommand: ParsableCommand {
         if persona.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw ValidationError("Persona name is required.")
         }
+        try validateRoomSelection(chat: chat, chatID: chatID, allMonitored: allMonitored)
     }
 
     func run() throws {
+        let channelStore = try ChannelStore()
+
         guard AccessibilityPermission.ensureGranted() else {
             AccessibilityPermission.printInstructions()
             throw ExitCode.failure
@@ -232,11 +269,28 @@ struct BotRunCommand: ParsableCommand {
         let personaConfig = try Persona.load(named: persona)
         let alias = KtokPaths.activeAccountAlias() ?? "unknown"
 
-        let rooms = try ChannelStore().monitoredChats()
+        let rooms: [ChannelChat]
+        if allMonitored {
+            rooms = try channelStore.monitoredChats()
+        } else if chat != nil || chatID != nil {
+            rooms = [try channelStore.resolveChat(exactTitle: chat, chatID: chatID)]
+        } else if let selfChatTitle = personaConfig.config.selfChatTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !selfChatTitle.isEmpty {
+            rooms = [try channelStore.resolveChat(exactTitle: selfChatTitle, chatID: nil)]
+        } else {
+            let defaults = try channelStore.monitoredChats().filter { $0.mode == "self_control" }
+            guard defaults.count == 1 else {
+                if defaults.isEmpty {
+                    throw ValidationError("No default bot room is configured. Mark exactly one room with --mode self_control or pass --chat/--chat-id.")
+                }
+                throw ValidationError("Multiple self_control rooms are configured. Pass --chat or --chat-id to choose one explicitly.")
+            }
+            rooms = defaults
+        }
+
         guard !rooms.isEmpty else {
             emit([
-                "event": "no_monitored_rooms",
-                "hint": "Add rooms with: ktok channel monitor add --title \"<room>\"",
+                "event": "no_bot_rooms",
+                "hint": "Mark exactly one default room with: ktok channel monitor add --chat-id '<id>' --mode self_control",
             ])
             return
         }
@@ -538,6 +592,15 @@ struct BotRunCommand: ParsableCommand {
         }
         // Ensure timely delivery when piped to a log/daemon.
         fflush(stdout)
+    }
+}
+
+private func validateRoomSelection(chat: String?, chatID: String?, allMonitored: Bool) throws {
+    if chat != nil && chatID != nil {
+        throw ValidationError("Use either --chat or --chat-id, not both.")
+    }
+    if allMonitored && (chat != nil || chatID != nil) {
+        throw ValidationError("Use --all-monitored or an explicit room override, not both.")
     }
 }
 

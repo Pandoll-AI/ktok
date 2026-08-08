@@ -2,7 +2,8 @@ import Foundation
 
 /// Runtime persona: reply-eligibility decisions, the LLM instruction block, and
 /// fallback replies — all driven by an external `PersonaConfig` so no private
-/// content lives in source. Shared by `ktok monitor` and `ktok bot`.
+/// content lives in source. Used by `ktok bot`; the legacy monitor path is
+/// currently inactive pending its Swift-native DB reader migration.
 struct Persona {
     let config: PersonaConfig
 
