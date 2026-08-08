@@ -213,7 +213,7 @@ enum BotTriggerMode: String, ExpressibleByArgument, CaseIterable {
 struct BotRunCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room.",
+        abstract: "Run an always-on persona chatbot in the configured KakaoTalk room."
     )
 
     @Option(name: .long, help: "Persona name (loads ~/.ktok/persona/<name>.json).")
