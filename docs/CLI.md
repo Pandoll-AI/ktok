@@ -185,7 +185,7 @@ Options:
 | `--chat-id <id>` | Exact chat ID override (mutually exclusive with `--chat` and `--all-monitored`). |
 | `--all-monitored` | Use every monitored room (explicit multi-room opt-in). |
 | `--trigger-mode <mode>` | `persona` (default, decision gating) / `mention` (direct calls only) / `greeting` (direct calls or configured greetings only) / `all` (every new message) / `off` (detect only). |
-| `--model` / `--reasoning-effort` / `--reply-timeout` | Codex model (default `gpt-5.4-mini`), effort (default `medium`), reply timeout. |
+| `--model` / `--reasoning-effort` / `--reply-timeout` | Codex model (default `gpt-6-luna`), effort (default `medium`), reply timeout. |
 | `--loop-delay` / `--poll-interval` | Base and extra sleep between room sweeps. |
 | `--snapshot-limit` / `--heartbeat-interval` | Context size / heartbeat cadence. |
 | `--dry-run` | Decide and log replies without sending. (`install-daemon --dry-run` prints the plist and skips live room resolution.) |

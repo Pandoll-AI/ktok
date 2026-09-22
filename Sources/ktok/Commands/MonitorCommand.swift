@@ -21,7 +21,7 @@ struct MonitorCommand: ParsableCommand {
     var pollInterval: Double = 0
 
     @Option(name: .long, help: "Codex model for reply generation")
-    var model: String = "gpt-5.4-mini"
+    var model: String = "gpt-6-luna"
 
     @Option(name: .long, help: "Codex reasoning effort config value")
     var reasoningEffort: String = "low"

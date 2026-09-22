@@ -63,7 +63,7 @@ struct BotInstallDaemonCommand: ParsableCommand {
     var triggerMode: BotTriggerMode = .persona
 
     @Option(name: .long, help: "Codex model for reply generation.")
-    var model: String = "gpt-5.4-mini"
+    var model: String = "gpt-6-luna"
 
     @Option(name: .long, help: "Codex reasoning effort config value.")
     var reasoningEffort: String = "medium"
@@ -232,7 +232,7 @@ struct BotRunCommand: ParsableCommand {
     var allMonitored: Bool = false
 
     @Option(name: .long, help: "Codex model for reply generation.")
-    var model: String = "gpt-5.4-mini"
+    var model: String = "gpt-6-luna"
 
     @Option(name: .long, help: "Codex reasoning effort config value.")
     var reasoningEffort: String = "medium"

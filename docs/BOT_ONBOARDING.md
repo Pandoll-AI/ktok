@@ -63,7 +63,7 @@ printf 'Reply with exactly: OK\n' | \
     --ignore-rules \
     --sandbox read-only \
     --color never \
-    -m gpt-5.4-mini \
+    -m gpt-6-luna \
     -c 'model_reasoning_effort="low"' \
     -o "$tmp" -
 cat "$tmp"
@@ -116,7 +116,7 @@ ktok bot install-daemon \
   --persona <persona> \
   --chat-id "<chat_id>" \
   --trigger-mode greeting \
-  --model gpt-5.4-mini \
+  --model gpt-6-luna \
   --reasoning-effort low \
   --reply-timeout 12 \
   --loop-delay 0.5 \
@@ -128,7 +128,7 @@ ktok bot install-daemon \
   --persona <persona> \
   --chat-id "<chat_id>" \
   --trigger-mode greeting \
-  --model gpt-5.4-mini \
+  --model gpt-6-luna \
   --reasoning-effort low \
   --reply-timeout 12 \
   --loop-delay 0.5 \
