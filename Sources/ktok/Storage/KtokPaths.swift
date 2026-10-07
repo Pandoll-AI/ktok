@@ -167,6 +167,14 @@ enum KtokPaths {
     }
 
     static func migrateLegacyStorageIfNeeded() {
+        LegacyMigrationGate.shared.perform(runLegacyMigrationBody)
+    }
+
+    /// Returns the alias whose directories were ensured, or nil when no account is current.
+    /// Caller holds `LegacyMigrationGate`'s lock. Do not call `migrateLegacyStorageIfNeeded` from here.
+    private static func runLegacyMigrationBody() -> String? {
+        // Drop a cached nil from the pre-check so a legacy account file copied below is visible.
+        LoginAccountState.invalidateCachedRead()
         ensureWorkspace()
         let fm = FileManager.default
 
@@ -174,7 +182,7 @@ enum KtokPaths {
         copyIfNeeded(from: legacyAXCache, to: axCache)
 
         guard let alias = activeAccountAlias() else {
-            return
+            return nil
         }
 
         let accountDirectory = accountDir(alias: alias)
@@ -183,16 +191,15 @@ enum KtokPaths {
         try? fm.createDirectory(atPath: defaultDownloads(alias: alias), withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: defaultJobs(alias: alias), withIntermediateDirectories: true)
 
-        guard !fm.fileExists(atPath: legacyMigrationMarker.path) else {
-            return
+        if !fm.fileExists(atPath: legacyMigrationMarker.path) {
+            copyIfNeeded(from: legacyChatRegistry, to: rooms(alias: alias))
+            let newDB = URL(fileURLWithPath: defaultDB(alias: alias))
+            copyIfNeeded(from: legacyDatabase, to: newDB)
+            copyIfNeeded(from: URL(fileURLWithPath: legacyDatabase.path + "-wal"), to: URL(fileURLWithPath: newDB.path + "-wal"))
+            copyIfNeeded(from: URL(fileURLWithPath: legacyDatabase.path + "-shm"), to: URL(fileURLWithPath: newDB.path + "-shm"))
+            writeLegacyMigrationMarker(alias: alias)
         }
-
-        copyIfNeeded(from: legacyChatRegistry, to: rooms(alias: alias))
-        let newDB = URL(fileURLWithPath: defaultDB(alias: alias))
-        copyIfNeeded(from: legacyDatabase, to: newDB)
-        copyIfNeeded(from: URL(fileURLWithPath: legacyDatabase.path + "-wal"), to: URL(fileURLWithPath: newDB.path + "-wal"))
-        copyIfNeeded(from: URL(fileURLWithPath: legacyDatabase.path + "-shm"), to: URL(fileURLWithPath: newDB.path + "-shm"))
-        writeLegacyMigrationMarker(alias: alias)
+        return alias
     }
 
     static func writeAccountMetadata(credentials: LoginCredentials, profileName: String? = nil) {
@@ -313,6 +320,40 @@ struct AccountMetadata: Codable {
     let keychainAccount: String
     let credentialBackend: String
     let lastVerifiedAt: String
+}
+
+/// Skips `ensureWorkspace` and the legacy file copies once this process has handled
+/// the current home+alias. A nil alias does not stick: a later `LoginAccountState.save`
+/// in the same process still runs the body. NSLock is not recursive — the body must
+/// not re-enter `migrateLegacyStorageIfNeeded`.
+private final class LegacyMigrationGate: @unchecked Sendable {
+    static let shared = LegacyMigrationGate()
+    private let lock = NSLock()
+    private var completedKey: String?
+    private var noAliasHome: String?
+
+    func perform(_ body: () -> String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        let home = KtokPaths.home.path
+        let alias = KtokPaths.activeAccountAlias()
+        if let alias {
+            if completedKey == cacheKey(home: home, alias: alias) { return }
+        } else if noAliasHome == home {
+            return
+        }
+        let result = body()
+        if let result {
+            completedKey = cacheKey(home: home, alias: result)
+            noAliasHome = nil
+        } else {
+            noAliasHome = home
+        }
+    }
+
+    private func cacheKey(home: String, alias: String) -> String {
+        home + "\u{0}" + alias
+    }
 }
 
 enum KtokStorageError: Error, CustomStringConvertible {

@@ -323,13 +323,19 @@ struct LoginAccountState: Codable {
     }
 
     static func readWithoutMigration(path: String = defaultPath) -> LoginAccountState? {
-        guard
-            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-            let state = try? JSONDecoder().decode(LoginAccountState.self, from: data)
-        else {
-            return nil
+        LoginAccountStateCache.shared.read(path: path) {
+            guard
+                let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                let state = try? JSONDecoder().decode(LoginAccountState.self, from: data)
+            else {
+                return nil
+            }
+            return state
         }
-        return state
+    }
+
+    static func invalidateCachedRead() {
+        LoginAccountStateCache.shared.invalidate()
     }
 
     static func save(credentials: LoginCredentials, profileName: String? = nil, path: String = defaultPath) throws {
@@ -351,12 +357,42 @@ struct LoginAccountState: Codable {
         )
         let data = try JSONEncoder().encode(state)
         try data.write(to: url, options: [.atomic])
+        invalidateCachedRead()
         KtokPaths.writeAccountMetadata(credentials: credentials, profileName: profileName)
         KtokPaths.migrateLegacyStorageIfNeeded()
     }
 
     static func clear(path: String = defaultPath) {
         try? FileManager.default.removeItem(atPath: path)
+        invalidateCachedRead()
+    }
+}
+
+/// One-slot cache of `current-account.json`. A cached nil is valid until `invalidate`.
+/// `load` must not call migrate or `invalidate` — NSLock is not recursive.
+private final class LoginAccountStateCache: @unchecked Sendable {
+    static let shared = LoginAccountStateCache()
+    private let lock = NSLock()
+    private var cachedPath: String?
+    private var cachedState: LoginAccountState?
+
+    func read(path: String, load: () -> LoginAccountState?) -> LoginAccountState? {
+        lock.lock()
+        defer { lock.unlock() }
+        if cachedPath == path {
+            return cachedState
+        }
+        let state = load()
+        cachedPath = path
+        cachedState = state
+        return state
+    }
+
+    func invalidate() {
+        lock.lock()
+        cachedPath = nil
+        cachedState = nil
+        lock.unlock()
     }
 }
 
