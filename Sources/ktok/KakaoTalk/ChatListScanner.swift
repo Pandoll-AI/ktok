@@ -194,10 +194,12 @@ struct ChatListScanner {
         }
 
         trace?("chats: container fast path miss, scanning")
-        let tables = window.findAll(role: kAXTableRole, limit: 1, maxNodes: 220)
-        let outlines = window.findAll(role: kAXOutlineRole, limit: 1, maxNodes: 220)
-        let lists = window.findAll(role: kAXListRole, limit: 1, maxNodes: 220)
-        let container = tables.first ?? outlines.first ?? lists.first
+        let found = window.findAll(
+            roles: [kAXTableRole, kAXOutlineRole, kAXListRole],
+            roleLimits: [kAXTableRole: 1, kAXOutlineRole: 1, kAXListRole: 1],
+            maxNodes: 220
+        )
+        let container = found[kAXTableRole]?.first ?? found[kAXOutlineRole]?.first ?? found[kAXListRole]?.first
 
         if let container {
             AXPathCacheStore.shared.remember(slot: .chatListContainer, root: window, element: container, trace: trace)

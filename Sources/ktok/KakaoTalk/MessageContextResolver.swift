@@ -72,14 +72,19 @@ struct MessageContextResolver {
             var candidates: [UIElement] = []
 
             if let focusedWindow = kakao.focusedWindow {
+                let sameElement = areSameAXElement(focusedWindow, chatWindow)
                 let focusedWindowMatches = isLikelySameWindow(focusedWindow, chatWindow)
                 var focusedWindowCandidates: [UIElement] = []
                 if focusedWindowMatches {
                     focusedWindowCandidates = collectMessageInputCandidates(from: focusedWindow, limit: attempt == 1 ? 36 : 60)
                     candidates.append(contentsOf: focusedWindowCandidates)
                 }
-                let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
-                candidates.append(contentsOf: chatWindowCandidates)
+                // CFEqual means the second walk is the same tree. Title or frame
+                // similarity alone still searches both windows.
+                if !sameElement {
+                    let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
+                    candidates.append(contentsOf: chatWindowCandidates)
+                }
                 runner.log("read: input attempt \(attempt) focused=\(focusedWindowCandidates.count) total=\(candidates.count)")
             } else {
                 let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
