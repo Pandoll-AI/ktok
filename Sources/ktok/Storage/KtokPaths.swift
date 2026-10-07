@@ -322,37 +322,64 @@ struct AccountMetadata: Codable {
     let lastVerifiedAt: String
 }
 
+/// Identity of one filesystem path. A missing file is its own stamp, so a later
+/// create or replace (login, logout, config import) does not match.
+struct KtokFileStamp: Equatable {
+    var exists: Bool
+    var inode: UInt64
+    var size: UInt64
+    var mtime: TimeInterval
+
+    static let missing = KtokFileStamp(exists: false, inode: 0, size: 0, mtime: 0)
+
+    static func capture(_ path: String) -> KtokFileStamp {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return .missing
+        }
+        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        return KtokFileStamp(exists: true, inode: inode, size: size, mtime: mtime)
+    }
+}
+
 /// Skips `ensureWorkspace` and the legacy file copies once this process has handled
-/// the current home+alias. A nil alias does not stick: a later `LoginAccountState.save`
-/// in the same process still runs the body. NSLock is not recursive — the body must
-/// not re-enter `migrateLegacyStorageIfNeeded`.
+/// the current home, alias, and account-file stamp. A nil alias does not stick:
+/// a later file (or a changed stamp) runs the body again. NSLock is not recursive —
+/// the body must not re-enter `migrateLegacyStorageIfNeeded`.
 private final class LegacyMigrationGate: @unchecked Sendable {
     static let shared = LegacyMigrationGate()
     private let lock = NSLock()
-    private var completedKey: String?
-    private var noAliasHome: String?
+    private var completed: MigrationKey?
+    private var noAlias: MigrationKey?
 
     func perform(_ body: () -> String?) {
         lock.lock()
         defer { lock.unlock() }
         let home = KtokPaths.home.path
+        let accountPath = KtokPaths.currentAccountState.path
+        let stamp = KtokFileStamp.capture(accountPath)
         let alias = KtokPaths.activeAccountAlias()
         if let alias {
-            if completedKey == cacheKey(home: home, alias: alias) { return }
-        } else if noAliasHome == home {
+            if completed == MigrationKey(home: home, alias: alias, stamp: stamp) { return }
+        } else if noAlias == MigrationKey(home: home, alias: "", stamp: stamp) {
             return
         }
         let result = body()
+        let stampAfter = KtokFileStamp.capture(accountPath)
         if let result {
-            completedKey = cacheKey(home: home, alias: result)
-            noAliasHome = nil
+            completed = MigrationKey(home: home, alias: result, stamp: stampAfter)
+            noAlias = nil
         } else {
-            noAliasHome = home
+            completed = nil
+            noAlias = MigrationKey(home: home, alias: "", stamp: stampAfter)
         }
     }
 
-    private func cacheKey(home: String, alias: String) -> String {
-        home + "\u{0}" + alias
+    private struct MigrationKey: Equatable {
+        let home: String
+        let alias: String
+        let stamp: KtokFileStamp
     }
 }
 

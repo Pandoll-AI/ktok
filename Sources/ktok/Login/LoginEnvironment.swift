@@ -368,22 +368,27 @@ struct LoginAccountState: Codable {
     }
 }
 
-/// One-slot cache of `current-account.json`. A cached nil is valid until `invalidate`.
+/// One-slot cache of `current-account.json`. A hit requires the same path and
+/// file stamp (mtime, size, inode; a missing file is its own stamp), so another
+/// process's login, logout, or import is visible on the next read.
 /// `load` must not call migrate or `invalidate` — NSLock is not recursive.
 private final class LoginAccountStateCache: @unchecked Sendable {
     static let shared = LoginAccountStateCache()
     private let lock = NSLock()
     private var cachedPath: String?
+    private var cachedStamp: KtokFileStamp?
     private var cachedState: LoginAccountState?
 
     func read(path: String, load: () -> LoginAccountState?) -> LoginAccountState? {
         lock.lock()
         defer { lock.unlock() }
-        if cachedPath == path {
+        let stamp = KtokFileStamp.capture(path)
+        if cachedPath == path, cachedStamp == stamp {
             return cachedState
         }
         let state = load()
         cachedPath = path
+        cachedStamp = stamp
         cachedState = state
         return state
     }
@@ -391,6 +396,7 @@ private final class LoginAccountStateCache: @unchecked Sendable {
     func invalidate() {
         lock.lock()
         cachedPath = nil
+        cachedStamp = nil
         cachedState = nil
         lock.unlock()
     }
