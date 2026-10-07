@@ -461,12 +461,15 @@ struct ChannelPollOnceCommand: ParsableCommand {
     var json: Bool = false
 
     func run() throws {
+        try poll(using: try ChannelStore())
+    }
+
+    func poll(using store: ChannelStore) throws {
         guard AccessibilityPermission.ensureGranted() else {
             AccessibilityPermission.printInstructions()
             throw ExitCode.failure
         }
 
-        let store = try ChannelStore()
         let chats: [ChannelChat]
         if allMonitored {
             chats = try store.monitoredChats()
@@ -547,14 +550,22 @@ struct ChannelDaemonCommand: ParsableCommand {
 
     func run() throws {
         var loops = 0
+        var store: ChannelStore?
         while true {
             loops += 1
             do {
+                let active: ChannelStore
+                if let existing = store {
+                    active = existing
+                } else {
+                    active = try ChannelStore()
+                    store = active
+                }
                 var poll = ChannelPollOnceCommand()
                 poll.allMonitored = true
                 poll.json = json
                 poll.traceAX = traceAX
-                try poll.run()
+                try poll.poll(using: active)
             } catch {
                 if json {
                     KtokWorkspaceStore.printJSON(["ok": false, "error": String(describing: error), "loop": loops])
@@ -564,7 +575,13 @@ struct ChannelDaemonCommand: ParsableCommand {
             }
 
             if let maxLoops, loops >= maxLoops { break }
-            let status = try ChannelStore().status()
+            let statusStore: ChannelStore
+            if let existing = store {
+                statusStore = existing
+            } else {
+                statusStore = try ChannelStore()
+            }
+            let status = try statusStore.status()
             if json {
                 KtokWorkspaceStore.printJSON(["event": "sleep", "seconds": status.nextIntervalSeconds])
             } else {
