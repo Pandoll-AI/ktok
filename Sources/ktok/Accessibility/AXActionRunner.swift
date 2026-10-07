@@ -238,11 +238,6 @@ struct AXActionRunner {
         pressKey(code: 3, flags: .maskCommand) // F
     }
 
-    func pressCommandA() {
-        log("keyboard: pressing Cmd+A")
-        pressKey(code: 0, flags: .maskCommand) // A
-    }
-
     @discardableResult
     func clickScreenPoint(_ point: CGPoint, label: String) -> Bool {
         log("\(label): clicking screen point x=\(Int(point.x)) y=\(Int(point.y))")

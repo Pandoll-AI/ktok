@@ -100,10 +100,6 @@ enum KtokPaths {
         LoginAccountState.readWithoutMigration()?.alias
     }
 
-    static func activeAccountDir() -> URL? {
-        activeAccountAlias().map(accountDir(alias:))
-    }
-
     static func activeDatabasePath() throws -> String {
         migrateLegacyStorageIfNeeded()
         guard let alias = activeAccountAlias() else {

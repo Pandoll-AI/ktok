@@ -782,32 +782,6 @@ struct ChatSettingsNavigator {
 
     // MARK: - Helpers
 
-    /// Find a pressable element (AXButton, AXMenuItem, AXCell, AXStaticText)
-    /// whose label lowercased matches one of `needles`.
-    private func findPressable(in root: UIElement, matchingLowercased needles: Set<String>) -> UIElement? {
-        let candidates = root.findAll(
-            where: { element in
-                switch element.role {
-                case kAXButtonRole, kAXMenuItemRole, kAXCellRole, kAXStaticTextRole, kAXRowRole:
-                    return true
-                default:
-                    return false
-                }
-            },
-            limit: 160,
-            maxNodes: 1_600
-        )
-        return candidates.first { element in
-            let labels = [
-                element.title ?? "",
-                element.stringValue ?? "",
-                element.axDescription ?? "",
-            ]
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            return labels.contains { needles.contains($0) }
-        }
-    }
-
     /// Walk up ancestors looking for one that supports AXPress. Some
     /// KakaoTalk settings rows expose the label on a StaticText whose parent
     /// AXCell / AXRow is the actual click target.
@@ -937,46 +911,6 @@ struct ChatSettingsNavigator {
             let v = (t.stringValue ?? "").trimmingCharacters(in: .whitespaces)
             return markers.contains(v)
         }
-    }
-
-    /// Look for an element whose label matches a known marker AND did not
-    /// exist in the chat window before the press (baseline sets). Scope is
-    /// tightly bounded to keep each iteration fast (< 200ms).
-    private func findSettingsMarker(
-        in root: UIElement,
-        baselineButtons: Set<String>,
-        baselineStaticTexts: Set<String>
-    ) -> UIElement? {
-        // We return the ROOT, not the marker element — upstream uses the root
-        // as the search surface for clickManageChats / clickSaveAsTextFile.
-        let markers: Set<String> = [
-            "Manage Chats", "채팅방 관리",
-            "Save as a text file", "Save as text file",
-            "텍스트 파일로 저장", "대화 내용 내보내기",
-            "Chatroom Settings", "채팅방 설정",
-        ]
-        let buttons = root.findAll(role: kAXButtonRole, limit: 40, maxNodes: 300)
-        for btn in buttons {
-            let title = (btn.title ?? "").trimmingCharacters(in: .whitespaces)
-            if markers.contains(title), !baselineButtons.contains(title) {
-                return root
-            }
-        }
-        let staticTexts = root.findAll(role: kAXStaticTextRole, limit: 40, maxNodes: 300)
-        for txt in staticTexts {
-            let val = (txt.stringValue ?? "").trimmingCharacters(in: .whitespaces)
-            if markers.contains(val), !baselineStaticTexts.contains(val) {
-                return root
-            }
-        }
-        let menuItems = root.findAll(role: kAXMenuItemRole, limit: 40, maxNodes: 300)
-        for item in menuItems {
-            let title = (item.title ?? "").trimmingCharacters(in: .whitespaces)
-            if markers.contains(title) {
-                return root
-            }
-        }
-        return nil
     }
 
     /// Emit the first few NEW labels that appeared in the chat window since

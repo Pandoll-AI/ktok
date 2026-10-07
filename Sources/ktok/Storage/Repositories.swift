@@ -38,22 +38,6 @@ struct ChatRepository {
             lastSyncedAt: stmt.columnText(at: 4)
         )
     }
-
-    func findByDisplayName(_ name: String) throws -> ChatRecord? {
-        let stmt = try db.prepare("""
-            SELECT chat_id, display_name, my_nickname, first_seen_at, last_synced_at
-            FROM chats WHERE display_name = ? ORDER BY last_synced_at DESC LIMIT 1
-        """)
-        try stmt.bindAll([name])
-        guard try stmt.step() else { return nil }
-        return ChatRecord(
-            chatId: stmt.columnText(at: 0) ?? "",
-            displayName: stmt.columnText(at: 1) ?? "",
-            myNickname: stmt.columnText(at: 2),
-            firstSeenAt: stmt.columnText(at: 3) ?? "",
-            lastSyncedAt: stmt.columnText(at: 4)
-        )
-    }
 }
 
 // MARK: - Messages

@@ -232,17 +232,6 @@ struct ChatListScanner {
         return deduplicateElements(discoveredRows)
     }
 
-    private func snapshots(from rows: [UIElement], trace: ((String) -> Void)? = nil) -> [ChatListSnapshotItem] {
-        rows.enumerated().map { index, row in
-            let title = extractTitle(from: row, trace: trace)
-            let preview = extractPreview(from: row, title: title, trace: trace)
-            return ChatListSnapshotItem(
-                element: row,
-                discovery: ChatListDiscovery(title: title, lastMessage: preview, listIndex: index)
-            )
-        }
-    }
-
     private func fullScanKey(_ discovery: ChatListDiscovery) -> String {
         let title = ChatTextNormalizer.normalize(discovery.title)
         let preview = discovery.lastMessage.map(ChatTextNormalizer.normalize) ?? ""

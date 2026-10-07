@@ -31,12 +31,6 @@ public final class UIElement: @unchecked Sendable {
         _ = configureMessagingTimeoutOnce
     }
 
-    /// Get the system-wide UI element
-    public static func systemWide() -> UIElement {
-        configureMessagingTimeoutIfNeeded()
-        return UIElement(AXUIElementCreateSystemWide())
-    }
-
     /// Create a UI element for an application with the given PID
     public static func application(pid: pid_t) -> UIElement {
         configureMessagingTimeoutIfNeeded()

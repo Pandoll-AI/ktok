@@ -282,24 +282,6 @@ public final class KakaoTalkApp: Sendable {
         app
     }
 
-    // MARK: - Debug
-
-    /// Print the UI hierarchy for debugging
-    public func printHierarchy(maxDepth: Int = 3) {
-        print("KakaoTalk UI Hierarchy:")
-        printElement(app, depth: 0, maxDepth: maxDepth)
-    }
-
-    private func printElement(_ element: UIElement, depth: Int, maxDepth: Int) {
-        guard depth <= maxDepth else { return }
-
-        let indent = String(repeating: "  ", count: depth)
-        print("\(indent)\(element.debugDescription)")
-
-        for child in element.children {
-            printElement(child, depth: depth + 1, maxDepth: maxDepth)
-        }
-    }
 }
 
 // MARK: - Errors

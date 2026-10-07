@@ -555,10 +555,6 @@ struct WatchPollingState {
         return (0, -1)
     }
 
-    private func findOverlapCount(_ previous: [TranscriptMessage], _ current: [TranscriptMessage]) -> Int {
-        findOverlap(previous, current).count
-    }
-
     private func messagesEquivalent(_ lhs: TranscriptMessage, _ rhs: TranscriptMessage) -> Bool {
         guard lhs.isSystem == rhs.isSystem else { return false }
         guard normalizeForDiff(lhs.body) == normalizeForDiff(rhs.body) else { return false }

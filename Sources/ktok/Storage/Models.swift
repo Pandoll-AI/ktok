@@ -63,19 +63,6 @@ enum AttachmentSource: String {
     case manual = "manual"
 }
 
-struct SyncRunRecord {
-    let id: Int64?
-    let chatId: String
-    let startedAt: String
-    var finishedAt: String?
-    var dumpFilePath: String?
-    var linesParsed: Int?
-    var messagesInserted: Int?
-    var messagesSkippedDuplicates: Int?
-    var attachmentsInserted: Int?
-    var error: String?
-}
-
 // MARK: - Dedupe hashing
 
 enum DedupeKey {

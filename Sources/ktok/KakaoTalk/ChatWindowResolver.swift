@@ -869,63 +869,6 @@ struct ChatWindowResolver {
         return resolveOpenedChatWindowFast(query: query)
     }
 
-    private func windowContainsLikelyChatInput(_ window: UIElement) -> Bool {
-        if window.findFirst(where: { element in
-            guard element.isEnabled else { return false }
-            return element.role == kAXTextAreaRole
-        }) != nil {
-            return true
-        }
-
-        return window.findFirst(where: { element in
-            isLikelyMessageInputElement(element, in: window) && element.role != kAXTextFieldRole
-        }) != nil
-    }
-
-    private func isLikelyMessageInputElement(_ element: UIElement, in window: UIElement? = nil) -> Bool {
-        guard element.isEnabled else { return false }
-        let role = element.role ?? ""
-        if role == kAXTextAreaRole {
-            return true
-        }
-
-        let editable: Bool = element.attributeOptional(kAXEditableAttribute) ?? false
-        guard editable else { return false }
-        guard role != kAXStaticTextRole && role != kAXImageRole else { return false }
-        if role == kAXTextFieldRole, isLikelySearchField(element, in: window) {
-            return false
-        }
-        return true
-    }
-
-    private func isLikelySearchField(_ element: UIElement, in window: UIElement?) -> Bool {
-        let role = element.role ?? ""
-        guard role == kAXTextFieldRole else { return false }
-
-        let joinedText = [
-            element.identifier ?? "",
-            element.title ?? "",
-            element.axDescription ?? "",
-        ]
-        .joined(separator: " ")
-        .lowercased()
-
-        if joinedText.contains("search") || joinedText.contains("검색") {
-            return true
-        }
-
-        guard let windowFrame = window?.frame, let elementFrame = element.frame, windowFrame.height > 0 else {
-            return false
-        }
-
-        if !isElementLikelyInsideWindow(elementFrame: elementFrame, windowFrame: windowFrame) {
-            return true
-        }
-
-        let relativeY = (elementFrame.midY - windowFrame.minY) / windowFrame.height
-        return relativeY < 0.5
-    }
-
     private func pickBestSearchResult(from candidates: [SearchCandidate]) -> UIElement? {
         guard !candidates.isEmpty else { return nil }
         guard candidates.count == 1 else {
