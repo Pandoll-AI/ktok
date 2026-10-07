@@ -118,4 +118,22 @@
 
 ## 4. 검증
 
-빌드와 `scripts/test-bot-room-selector.sh` 결과는 구현 커밋 뒤에 이 절을 고친다. 속도는 실측하지 않았다.
+코드 커밋은 `740cf1a` dead code, `9a4a9d5` paths, `8d863c5` resolver, `6d49970` channel daemon. 이 절과 CHANGELOG는 그 다음 커밋이다.
+
+`swift build -c release`는 각 코드 커밋 전에 통과했다. 경고는 기존 두 종류뿐이다. `LoginCommand.swift`의 `String?` → `Any` 암시 변환, `SecretStore.swift:85`의 `SecKeychainOpen` deprecation. 새로 늘어난 경고는 없다. 마지막 코드 빌드 꼬리: `Build complete! (21.79 sec)`.
+
+`KTOK_BIN=.build/release/ktok bash scripts/test-bot-room-selector.sh`는 카카오톡 없이 통과했다. `passed=20 failed=0`. `ktok monitor is inactive` 검사를 포함한다.
+
+속도는 실측하지 않았다. 줄인 것은 호출 횟수다.
+
+- `migrateLegacyStorageIfNeeded`의 `ensureWorkspace`와 `fileExists`는 같은 홈·alias에서 매 호출에서 프로세스당 1회로 준다. alias가 없으면 그 상태를 기억하고, 계정 파일이 생긴 뒤 본문을 다시 실행한다.
+- `current-account.json` 디코드는 같은 경로의 반복 `read` / `readWithoutMigration`에서 무효화 전까지 1회다.
+- daemon 사이클의 `ChannelStore` open과 `migrate()` SQL은 사이클당 2회에서 프로세스당 1회다. `poll-once`는 호출마다 1회다.
+- 채팅 목록 컨테이너 캐시 미스의 role BFS는 3회에서 1회다.
+- `read` 입력 후보 탐색은 포커스 창과 대상 창이 `CFEqual`일 때 2회에서 1회다. 원소가 다르면 2회다.
+
+실측은 카카오톡이 떠 있는 맥에서 `time ktok channel daemon --json --max-loops 1`, `time ktok chats --json`, `time ktok read --json`을 리팩토 전후 바이너리로 비교하면 된다. 이 세션에서는 AX를 조작하지 않아 재지 않았다.
+
+보류는 2절과 같다. 다른 프로세스가 `current-account.json`을 바꿔도 이 프로세스의 계정 캐시는 `save`, `clear`, 마이그레이션 본문이 돌기 전까지 유지된다. 한 번 실행되는 CLI는 프로세스가 끝나며 캐시가 사라지고, 오래 떠 있는 `channel daemon`, `bot run`, `mcp-server`는 계정 전환 뒤 재시작이 필요하다.
+
+마이그레이션 가드 키는 홈 경로와 alias다. 같은 프로세스에서 `KTOK_HOME`이 바뀌면 본문을 다시 실행한다.

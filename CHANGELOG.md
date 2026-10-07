@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Changed — 리팩토(속도·불필요 로직 제거) (2026-10-08)
+
+- 레거시 저장소 마이그레이션은 같은 프로세스·같은 홈·같은 계정 alias에서 한 번만 실행한다. alias가 없거나 바뀌면 본문을 다시 돌려 디렉터리 생성과 레거시 복사를 유지한다.
+- `current-account.json` 디코드는 프로세스 메모리에 한 벌만 둔다. `save`, `clear`, 마이그레이션 본문 시작에서 무효화한다.
+- `ktok channel daemon`은 sqlite `ChannelStore`를 프로세스당 한 번 연다. `poll-once`는 호출마다 자기 연결을 연다. 열기 실패 시 폴 오류를 찍고 `status()`에서 종료하는 동작은 유지한다.
+- `read` 입력 필드 탐색은 포커스 창과 대상 창이 같은 AX 원소일 때 트리를 한 번만 걷는다. 제목·프레임만 비슷하면 두 번 유지한다.
+- 채팅 목록 컨테이너 캐시 미스는 table, outline, list 탐색을 BFS 한 번으로 합친다. 우선순위는 table → outline → list.
+- 호출되지 않던 private 함수와 정의만 있던 심볼을 삭제했다. `ktok monitor`의 fail-closed 메시지, 종료, 플래그는 유지하고 레거시 본문만 제거했다.
+- `Thread.sleep` 값, `LegacyRoomsFile` 폴백, 레거시 복사 자체, 진단 커맨드(`inspect`, `dump-chat-ui`, `cache`)는 그대로다.
+
 ### Changed — Default bot room fail-closed + legacy monitor inactive (2026-08-08)
 
 - `ktok bot` default room selection is fail-closed with priority:
