@@ -79,9 +79,10 @@ struct MessageContextResolver {
                     focusedWindowCandidates = collectMessageInputCandidates(from: focusedWindow, limit: attempt == 1 ? 36 : 60)
                     candidates.append(contentsOf: focusedWindowCandidates)
                 }
-                // CFEqual means the second walk is the same tree. Title or frame
-                // similarity alone still searches both windows.
-                if !sameElement {
+                // Skip the chat-window walk only when it is the same AX element
+                // AND that walk already ran. An AX timeout can make title/frame
+                // comparison fail while CFEqual is still true.
+                if !(sameElement && focusedWindowMatches) {
                     let chatWindowCandidates = collectMessageInputCandidates(from: chatWindow, limit: attempt == 1 ? 36 : 60)
                     candidates.append(contentsOf: chatWindowCandidates)
                 }
