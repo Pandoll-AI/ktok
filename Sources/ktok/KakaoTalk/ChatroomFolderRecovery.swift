@@ -7,18 +7,13 @@ import Foundation
 /// re-read on a visible frontmost window and the point hits the folder strip.
 final class ChatroomFolderRecovery {
     private var attempted = false
-    private var postedClick = false
 
     /// True after this instance has found the strip and started an attempt.
     var hasAttempted: Bool { attempted }
 
-    /// True only after `clickScreenPoint` posted the All folder click.
-    var didPostClick: Bool { postedClick }
-
     /// `resolve()` calls this at entry so the next call can click again.
     func resetAttempt() {
         attempted = false
-        postedClick = false
     }
 
     /// Posts one HID click on All folder. Returns true only when the click was posted.
@@ -74,9 +69,6 @@ final class ChatroomFolderRecovery {
         let baseline = scanner.visibleRowElements(in: window, limit: 80)
         let savedCursor = CGEvent(source: nil)?.location
         let posted = runner.clickScreenPoint(point, label: "all-folder chip")
-        if posted {
-            postedClick = true
-        }
         if let savedCursor {
             _ = MouseEvents.move(to: savedCursor)
         }
