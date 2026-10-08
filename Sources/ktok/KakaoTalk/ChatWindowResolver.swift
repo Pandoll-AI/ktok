@@ -99,7 +99,7 @@ struct ChatWindowResolver {
             query: query,
             rootWindow: searchWindow,
             fallbackWindow: usableWindow,
-            recoverEmptyFolder: true
+            ensureAllFolderOnMiss: true
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -113,7 +113,7 @@ struct ChatWindowResolver {
             query: query,
             rootWindow: chatroomsRoot,
             fallbackWindow: usableWindow,
-            recoverEmptyFolder: true
+            ensureAllFolderOnMiss: true
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -800,25 +800,34 @@ struct ChatWindowResolver {
         query: String,
         rootWindow: UIElement,
         fallbackWindow: UIElement,
-        recoverEmptyFolder: Bool = false
+        ensureAllFolderOnMiss: Bool = false
     ) -> UIElement? {
         runner.log("resolve: probing visible chat-list rows by exact title")
         let trace: (String) -> Void = { message in
             runner.log("search-row: \(message)")
         }
-        var visibleRows = ChatListScanner().scan(in: rootWindow, limit: 80, trace: trace)
-        if recoverEmptyFolder {
-            visibleRows = folderRecovery.recoverIfEmpty(
-                rows: visibleRows,
-                window: rootWindow,
+        let scanner = ChatListScanner()
+        func exactTitleMatches(in rows: [ChatListSnapshotItem]) -> [ChatListSnapshotItem] {
+            rows.filter { snapshot in
+                scoreQueryMatch(query: query, candidateText: snapshot.discovery.title) > 0
+            }
+        }
+        var visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
+        var matches = exactTitleMatches(in: visibleRows)
+        // Unread can show a non-empty subset. Click All only when this query is
+        // absent, including zero rows. Two exact titles stay ambiguous.
+        if ensureAllFolderOnMiss && matches.isEmpty {
+            let clicked = folderRecovery.ensureAllFolder(
+                in: rootWindow,
                 kakao: kakao,
                 runner: runner,
-                limit: 80,
+                reason: "visible-row miss",
                 trace: trace
             )
-        }
-        let matches = visibleRows.filter { snapshot in
-            scoreQueryMatch(query: query, candidateText: snapshot.discovery.title) > 0
+            if clicked {
+                visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
+                matches = exactTitleMatches(in: visibleRows)
+            }
         }
 
         guard matches.count == 1, let match = matches.first else {

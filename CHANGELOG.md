@@ -18,11 +18,12 @@
 - `chatRowTitle`과 `chatRowPreview`의 저장·만료·stale 제거는 스캔 동안 메모리만 바꾸고 스캔 끝에 한 번 쓴다. 경로가 같으면 쓰지 않는다. trace는 `persist=deferred` 또는 `persist=1`, 그리고 `cache: persist writes=N deferred=M`이다.
 - `cache warmup`은 첫 행에서 고른 제목 원소를 `chatRowTitle`에 한 번 기록한다. 미리보기 원소를 고르는 순서는 그대로다.
 
-### Fixed — 채팅방 폴더가 Unread일 때 목록이 비는 문제 (2026-10-08)
+### Fixed — 채팅방 폴더가 Unread일 때 대상 방이 빠지는 문제 (2026-10-08)
 
-- 채팅 목록 스캔이 0행이고 `Chatroom folder` 리스트 안에 값 `All folder`가 있으면, 그 칩의 부모 그룹(없으면 텍스트) 중심을 한 번 클릭한 뒤 1.5초 안에 행이 생기면 다시 스캔한다. 칩에 AXPress가 없어 HID 클릭만 쓴다.
-- 적용은 `chats`, `channel refresh-chats`, 그리고 `read`/`send`/`channel poll-once`가 검색 전에 하는 보이는 행 탐색이다. 검색 경로와 폴더 줄이 없는 옛 버전은 클릭하지 않는다. 한 명령에서 최대 한 번이다.
-- 클릭 전에 `activateChatroomsTab`과 같이 `activate()` 후 0.08초를 기다리고, 카카오톡이 앞창이 아니면 클릭하지 않는다.
+- Unread에 안 읽은 방이 있으면 그 행만 보인다. 보이는 행에 대상 제목이 없으면(0행 포함) `Chatroom folder`의 `All folder`를 한 번 누르고, 행 원소가 바뀌거나 0.6초가 지나면 보이는 행을 한 번 더 찾는다. 그 다음에 검색으로 간다. 같은 제목이 둘 이상이면 누르지 않는다.
+- `chats`의 전체·limit 스캔과 `channel refresh-chats`는 폴더 줄이 있으면 스캔 전에 같은 클릭을 한 번 한다. 이미 All이면 목록이 그대로라 대기는 0.6초에서 끝난다. 0행일 때만 다시 스캔하던 분기는 없다.
+- 칩에 AXPress가 없고 선택 상태도 AX로 읽을 수 없다. 한 명령에서 한 번이다. 폴더 줄이 없으면 횟수를 올리지 않는다. 검색 경로의 보이는 행 스캔은 클릭하지 않는다. 앞창이 아니면 클릭하지 않는다.
+- trace는 `folder: ensured All folder (reason=...)`이다. reason은 `visible-row miss`, `chats pre-scan`, `channel refresh pre-scan`이다.
 
 ### Changed — 전체 채팅 스캔이 같은 행을 반복해서 읽지 않음 (2026-10-08)
 

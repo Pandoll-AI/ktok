@@ -3,30 +3,32 @@ import ApplicationServices.HIServices
 import Foundation
 
 /// KakaoTalk 26.x folder chips have no AXPress and reject AXSelected.
-/// One command may click "All folder" at most once, and only after a chat-list
-/// scan returned no rows. Builds without the folder strip do nothing.
+/// Selection is not exposed, so each command clicks "All folder" at most once
+/// when the strip exists. Builds without the strip do nothing.
 final class ChatroomFolderRecovery {
     private var attempted = false
 
-    func recoverIfEmpty(
-        rows: [ChatListSnapshotItem],
-        window: UIElement,
+    /// Posts one HID click on All folder. Returns true only when the click was posted.
+    /// Waits until the visible row elements change, or 0.6s if they stay the same.
+    @discardableResult
+    func ensureAllFolder(
+        in window: UIElement,
         kakao: KakaoTalkApp,
         runner: AXActionRunner,
-        limit: Int,
+        reason: String,
         trace: @escaping (String) -> Void
-    ) -> [ChatListSnapshotItem] {
-        guard rows.isEmpty, !attempted else { return rows }
+    ) -> Bool {
+        guard !attempted else { return false }
         guard let list = Self.chatroomFolderList(in: window),
               let chip = Self.allFolderText(in: list) else {
-            trace("chats: chatroom folder strip absent")
-            return rows
+            trace("folder: chatroom folder strip absent")
+            return false
         }
 
         attempted = true
         guard let point = Self.clickPoint(for: chip) else {
-            trace("chats: All folder chip has no frame")
-            return rows
+            trace("folder: All folder chip has no frame")
+            return false
         }
 
         kakao.activate()
@@ -43,28 +45,36 @@ final class ChatroomFolderRecovery {
                 || front.processIdentifier == expectedPID
         }
         guard frontmost else {
-            trace("chats: All folder click skipped because KakaoTalk is not frontmost")
-            return rows
-        }
-
-        trace("chats: clicking All folder chip x=\(Int(point.x)) y=\(Int(point.y))")
-        guard runner.clickScreenPoint(point, label: "all-folder chip") else {
-            return rows
+            trace("folder: All folder click skipped because KakaoTalk is not frontmost")
+            return false
         }
 
         let scanner = ChatListScanner()
-        var recovered: [ChatListSnapshotItem] = []
+        let baseline = scanner.visibleRowElements(in: window, limit: 80)
+        guard runner.clickScreenPoint(point, label: "all-folder chip") else {
+            return false
+        }
+        trace("folder: ensured All folder (reason=\(reason))")
         _ = runner.waitUntil(
             label: "all-folder rows",
-            timeout: 1.5,
+            timeout: 0.6,
             pollInterval: 0.05,
-            evaluateAfterTimeout: true
+            evaluateAfterTimeout: false
         ) {
-            recovered = scanner.scan(in: window, limit: limit, trace: trace)
-            return !recovered.isEmpty
+            let now = scanner.visibleRowElements(in: window, limit: 80)
+            return !Self.sameRowElements(baseline, now)
         }
-        trace("chats: All folder rescan rows=\(recovered.count)")
-        return recovered
+        return true
+    }
+
+    private static func sameRowElements(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+        guard previous.count == rows.count else { return false }
+        for (lhs, rhs) in zip(previous, rows) {
+            if !CFEqual(lhs.axElement, rhs.axElement) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Shallow walk. Chat tables and outlines are not entered, so a long row

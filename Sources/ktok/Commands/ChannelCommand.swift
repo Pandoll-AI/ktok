@@ -110,15 +110,14 @@ struct ChannelRefreshChatsCommand: ParsableCommand {
 
         let scanner = ChatListScanner()
         let trace: (String) -> Void = { runner.log($0) }
-        let scanned = scanner.scan(in: mainWindow, limit: limit, trace: trace)
-        let snapshots = ChatroomFolderRecovery().recoverIfEmpty(
-            rows: scanned,
-            window: mainWindow,
+        _ = ChatroomFolderRecovery().ensureAllFolder(
+            in: mainWindow,
             kakao: kakao,
             runner: runner,
-            limit: limit,
+            reason: "channel refresh pre-scan",
             trace: trace
         )
+        let snapshots = scanner.scan(in: mainWindow, limit: limit, trace: trace)
 
         let registry = ChatIdentityRegistryStore.shared
         let account = ChatAccountContext.active()

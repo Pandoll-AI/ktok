@@ -103,32 +103,18 @@ struct ChatsCommand: ParsableCommand {
         let trace: (String) -> Void = { message in
             runner.log(message)
         }
+        _ = folderRecovery.ensureAllFolder(
+            in: mainWindow,
+            kakao: kakao,
+            runner: runner,
+            reason: "chats pre-scan",
+            trace: trace
+        )
         let snapshots: [ChatListSnapshotItem]
         if let limit {
-            let scanned = scanner.scan(in: mainWindow, limit: limit, trace: trace)
-            snapshots = folderRecovery.recoverIfEmpty(
-                rows: scanned,
-                window: mainWindow,
-                kakao: kakao,
-                runner: runner,
-                limit: limit,
-                trace: trace
-            )
+            snapshots = scanner.scan(in: mainWindow, limit: limit, trace: trace)
         } else {
-            let scanned = scanner.scanAll(in: mainWindow, trace: trace)
-            if !scanned.isEmpty {
-                snapshots = scanned
-            } else {
-                let recovered = folderRecovery.recoverIfEmpty(
-                    rows: scanned,
-                    window: mainWindow,
-                    kakao: kakao,
-                    runner: runner,
-                    limit: 1,
-                    trace: trace
-                )
-                snapshots = recovered.isEmpty ? [] : scanner.scanAll(in: mainWindow, trace: trace)
-            }
+            snapshots = scanner.scanAll(in: mainWindow, trace: trace)
         }
 
         if snapshots.isEmpty {

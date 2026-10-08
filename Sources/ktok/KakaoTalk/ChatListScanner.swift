@@ -259,6 +259,14 @@ struct ChatListScanner {
         return deduplicateSlots(warmedSlots)
     }
 
+    /// Row elements only. Folder switches change this set without reading titles.
+    func visibleRowElements(in window: UIElement, limit: Int) -> [UIElement] {
+        guard let container = resolveChatListContainer(in: window, trace: nil) else {
+            return []
+        }
+        return collectChatItems(from: container, limit: limit)
+    }
+
     private func resolveChatListContainer(in window: UIElement, trace: ((String) -> Void)? = nil) -> UIElement? {
         if let cached = AXPathCacheStore.shared.resolve(
             slot: .chatListContainer,
