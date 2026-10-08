@@ -148,23 +148,23 @@
 
 Unread는 비어 있지 않을 수 있다. 안 읽은 방이 있으면 그 행만 보인다(실측 1행). 칩은 AXPress가 없고, 선택 상태도 AX 속성이 없다. 0행만 보는 조건은 대상 방이 그 부분집합 밖에 있을 때 놓친다. 그 상태에서 검색은 같은 이름 후보를 둘 내고 거절했다. All에서는 같은 방이 보이는 행으로 열렸다.
 
-`ChatWindowResolver.resolve`의 보이는 행 탐색은 대상 제목이 없고(0행 포함) `Chatroom folder` 줄이 있으면 `All folder`를 한 번 누른 뒤 같은 탐색을 한 번 더 한다. 그 다음이 검색이다. 같은 제목이 둘 이상이면 대상이 있는 것이므로 누르지 않는다. 부모 `AXGroup`의 frame 중심(없으면 텍스트 frame 중심)을 HID로 누른다.
+`ChatWindowResolver.resolve`의 보이는 행 탐색은 대상 제목이 없고(0행 포함) `Chatroom folder` 줄이 있으면 `All folder`를 누른 뒤 같은 탐색을 다시 한다. 재스캔에도 대상이 없으면 같은 `resolve()` 안에서 칩을 한 번 더 누르고 다시 스캔한다. 그 다음이 검색이다. 같은 제목이 둘 이상이면 대상이 있는 것이므로 누르지 않는다. 부모 `AXGroup`의 frame 중심(없으면 텍스트 frame 중심)을 HID로 누른다. 한 `resolve()`의 클릭은 최대 2회다.
 
-`chats` 전체·limit과 `channel refresh-chats`는 폴더 줄이 있으면 스캔 전에 한 번 누른다. 이미 All이면 행 원소가 그대로라 대기는 0.6초에서 끝난다. 0행일 때만 다시 스캔하던 분기는 이 선행 클릭으로 대체했다. refresh가 All 전에 비거나 부분집합만 읽으면 레거시 방 목록으로 떨어질 수 있어서다.
+`chats` 전체·limit과 `channel refresh-chats`는 폴더 줄이 있으면 스캔 전에 한 번만 누른다. 두 번째 클릭은 하지 않는다. 이미 All이면 행 원소가 그대로라 대기는 1.0초에서 끝난다. 0행일 때만 다시 스캔하던 분기는 이 선행 클릭으로 대체했다. refresh가 All 전에 비거나 부분집합만 읽으면 레거시 방 목록으로 떨어질 수 있어서다.
 
-대기는 행이 생길 때까지가 아니다. 보이는 행 원소(최대 80)를 순서대로 `CFEqual`해 집합이 바뀌거나 0.6초다. trace는 `folder: ensured All folder (reason=...)`이다. reason은 `visible-row miss`, `chats pre-scan`, `channel refresh pre-scan`이다.
+대기는 행이 생길 때까지가 아니고, 집합이 한 번 달라졌다고 끝나지도 않는다. 방금 활성화된 앱의 첫 클릭은 창 활성화에 쓰이고, 그 활성화가 행을 다시 그려 `CFEqual`만 달라질 수 있다. 보이는 행 원소(최대 80)를 0.1초 간격으로 읽고, 기준 집합과 달라진 뒤 두 번 연속 같은 스냅샷이면 안정으로 본다. 그렇지 않으면 1.0초에서 끊는다. 한 번도 안 바뀌면 1.0초를 채운다. trace는 `folder: ensured All folder (reason=...)` 다음에 `folder: all-folder rows stable` 또는 `folder: all-folder rows timeout changed=0|1`이다. reason은 `visible-row miss`, `visible-row miss retry`, `send pre-match`, `send pre-match retry`, `chats pre-scan`, `channel refresh pre-scan`이다.
 
-폴더 줄이 없으면 시도 횟수를 올리지 않는다. 친구 탭이 한 번의 기회를 소모하지 않게 하기 위해서다. 검색 필드가 없을 때의 보이는 행 스캔은 이 헬퍼를 호출하지 않는다.
+폴더 줄이 없으면 시도 횟수를 올리지 않는다. 친구 탭이 한 번의 기회를 소모하지 않게 하기 위해서다. 그래서 탭을 옮긴 뒤의 보이는 행 탐색은 아직 최대 2회를 누를 수 있다. 검색 필드가 없을 때의 보이는 행 스캔은 이 헬퍼를 호출하지 않는다.
 
-클릭 전 `activate()`와 0.08초 대기는 `activateChatroomsTab`과 같다. 이어서 0.6초 안에 앞창이 아니면 클릭하지 않는다. 그때는 그 `resolve()`의 한 번을 쓴다. 같은 `resolve()` 안의 두 번째 보이는 행 탐색은 다시 누르지 않는다.
+클릭 전 `activate()`와 0.08초 대기는 `activateChatroomsTab`과 같다. 이어서 0.6초 안에 앞창이 아니면 클릭하지 않는다. 그때는 `attempted`만 올리고 클릭 횟수는 0이다. 재클릭은 클릭이 한 번 나간 뒤에만 한다. 앞창 아님, 최소화, 칩 frame 없음, hit-test 거부는 다시 누르지 않는다. 같은 `resolve()`의 두 번째 보이는 행 탐색은 `isRetry`가 아니므로, 첫 탐색이 이미 시도했으면 남은 횟수가 있어도 누르지 않는다.
 
-`resolve()`는 시작마다 시도 횟수를 리셋한다. bot·watch처럼 리졸버를 오래 들고 있는 프로세스도 다음 `resolve()`의 miss에서 다시 All을 누를 수 있다. `chats`와 `channel refresh-chats`는 헬퍼를 한 번만 부르므로 명령당 한 번이다.
+`resolve()`는 시작마다 시도 횟수와 클릭 횟수를 리셋한다. bot·watch처럼 리졸버를 오래 들고 있는 프로세스도 다음 `resolve()`에서 다시 최대 2회를 누를 수 있다. `chats`와 `channel refresh-chats`는 헬퍼를 한 번만 부르므로 명령당 한 번이다.
 
-앞창 확인 뒤에 메인 창 `AXMinimized`가 false인지 본다. false일 때만 그 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창을 클릭하려고 꺼내지 않기 위해서다. Raise 액션이 없거나 실패해도 클릭 판단은 계속한다. 그 다음 칩 frame을 다시 읽는다. 채팅창이 칩 위에 있으면 올린 뒤에야 좌표가 칩을 가리킨다. 클릭 대상은 frame이 있는 부모 `AXGroup`이고, 없으면 `All folder` 정적 텍스트다. 시스템 히트 원소 자신이 그 대상이거나, 조상을 최대 4단계 올라갔을 때 그 대상과 `CFEqual`이면 누른다. `Chatroom folder` 목록이 조상인 것만으로는 통과하지 않는다. Unread 칩과 줄의 여백은 누르지 않는다. 아니면 클릭하지 않는다. trace는 `--trace-ax`일 때만 남고, 건너뛴 사유는 그 플래그와 상관없이 stderr 한 줄이다. `ktok: all-folder click skipped: not frontmost`, `minimized`, `chip frame missing`, `hit-test refused role=<role> title=<title>`. title이 비어 있으면 AXValue다. 히트 원소가 없으면 `role=? title=?`다. 줄바꿈은 공백으로 바꿔 한 줄을 유지한다. stdout JSON은 건드리지 않는다. 클릭이 나가지 않으면 `ensureAllFolder`는 false이고, 호출부의 다음 경로는 이 함수가 바꾸지 않는다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다. `activate()` 전에 `NSWorkspace.shared.frontmostApplication`을 저장한다. 클릭이 나가고 행 대기가 끝난 뒤에, 그 앱이 KakaoTalk이 아니고 종료되지 않았으며 이미 앞이 아니면 `NSRunningApplication.activate(options: [.activateIgnoringOtherApps])`로 되돌린다. 이미 앞이면 호출하지 않는다. 클릭을 건너뛴 경로에서는 되돌리지 않는다. send 계열은 명령 끝에서 같은 앱을 다시 되돌릴 수 있다. 앞창이 이미 그 앱이면 그 복원도 activate를 호출하지 않는다.
+앞창 확인 뒤에 메인 창 `AXMinimized`가 false인지 본다. false일 때만 그 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창을 클릭하려고 꺼내지 않기 위해서다. Raise 액션이 없거나 실패해도 클릭 판단은 계속한다. 그 다음 칩 frame을 다시 읽는다. 채팅창이 칩 위에 있으면 올린 뒤에야 좌표가 칩을 가리킨다. 클릭 대상은 frame이 있는 부모 `AXGroup`이고, 없으면 `All folder` 정적 텍스트다. 시스템 히트 원소 자신이 그 대상이거나, 조상을 최대 4단계 올라갔을 때 그 대상과 `CFEqual`이면 누른다. `Chatroom folder` 목록이 조상인 것만으로는 통과하지 않는다. Unread 칩과 줄의 여백은 누르지 않는다. 아니면 클릭하지 않는다. trace는 `--trace-ax`일 때만 남고, 건너뛴 사유는 그 플래그와 상관없이 stderr 한 줄이다. `ktok: all-folder click skipped: not frontmost`, `minimized`, `chip frame missing`, `hit-test refused role=<role> title=<title>`. title이 비어 있으면 AXValue다. 히트 원소가 없으면 `role=? title=?`다. 줄바꿈은 공백으로 바꿔 한 줄을 유지한다. stdout JSON은 건드리지 않는다. 클릭이 나가지 않으면 `ensureAllFolder`는 false이고, 호출부의 다음 경로는 이 함수가 바꾸지 않는다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다. 되돌릴 앱은 그 인스턴스의 첫 `activate()` 직전에 `FrontmostApp.current()`로 한 번만 저장한다. 재클릭 때의 앞 앱으로 덮지 않는다. `resolve()`는 복원을 클릭 직후에 하지 않는다. 보이는 행 탐색 두 번의 클릭과 재스캔이 끝난 뒤 한 번 한다. 행으로 방을 연 경우에는 그 함수가 돌아온 뒤이고, 둘 다 못 열면 검색 직전이다. 두 탐색 사이에는 되돌리지 않는다. 탭 전환과 그때의 클릭이 카카오톡이 앞인 채로 끝나게 하기 위해서다. 클릭이 나가지 않은 경로에서는 되돌리지 않는다. `chats`와 `channel refresh-chats`는 복원을 미루지 않는다. 클릭이 나가고 행 대기가 끝나면 그 자리에서 되돌리고, 그 다음 스캔한다. 되돌리는 조건은 그 앱이 KakaoTalk이 아니고 종료되지 않았으며 이미 앞이 아닌 것이다. 이미 앞이면 `activate`를 호출하지 않는다. send 계열은 명령 끝에서 같은 앱을 다시 되돌릴 수 있다. 앞창이 이미 그 앱이면 그 복원도 activate를 호출하지 않는다.
 
-`send`, `send-image`, `send-file`, bot이 방을 열 때, 그리고 그 명령을 실행하는 MCP send는 `ensureAllFolderBeforeMatch`로 보이는 행 판정 전에 All을 한 번 누른다. read 계열은 대상이 없을 때만 누른다. 줄이 있는데 클릭이 나가지 않으면 그때 보이는 행으로 수취인을 고르지 않는다.
+`send`, `send-image`, `send-file`, bot이 방을 열 때, 그리고 그 명령을 실행하는 MCP send는 `ensureAllFolderBeforeMatch`로 보이는 행 판정 전에 All을 누른다. 그 첫 클릭이 나간 뒤 대기 끝의 행 집합이 클릭 전과 같고, `activate()` 직전과 HID 클릭 직전의 앞 앱이 다르면 한 번 더 누른다. 한쪽 앞 앱을 못 읽으면 바뀐 것으로 본다. 이 두 번째 클릭은 miss 경로가 아니라 그 사전 클릭 안에 있다. 사전 클릭이 이미 나갔으면 miss 경로는 `isRetry`가 아니므로 다시 누르지 않는다. read 계열은 대상이 없을 때만 누르고, 재스캔에도 없으면 한 번 더 누른다. 줄이 있는데 클릭이 나가지 않으면 그때 보이는 행으로 수취인을 고르지 않는다. 검색은 그대로 진행한다.
 
-[ASSUMPTION] 클릭이 나간 뒤 행 원소 집합이 0.6초 안에 바뀌지 않으면 이미 All이었다고 보고 동명 판정을 진행한다. 검증: 운영 맥에서 All이 선택된 상태로 `ktok send`를 실행해, trace 대기 뒤 같은 방이 열리는지 본다.
+[ASSUMPTION] 1.0초 안에 행 집합이 기준과 같으면 폴더가 바뀌었다는 증거가 없다. send의 두 번째 클릭은 그 조건과 앞 앱이 바뀐 조건이 같이 있을 때만 한다. 보이는 행 miss의 두 번째 클릭은 재스캔에 대상이 없는 것만 본다. 검증: 운영 맥에서 Unread이고 다른 앱이 앞인 상태로 `ktok read`를 실행해, 첫 재스캔이 실패하면 같은 resolve에서 칩이 한 번 더 눌리고 앞 앱 복원은 그 뒤에 한 번인지 본다. All이 선택된 `ktok send`는 행이 그대로이고 앞 앱이 안 바뀌면 두 번째 클릭이 없어야 한다. 카카오톡 UI는 이 변경에서 조작하지 않았다.
 
 ## 8. 전체 스캔의 같은 행 (2026-10-08)
 

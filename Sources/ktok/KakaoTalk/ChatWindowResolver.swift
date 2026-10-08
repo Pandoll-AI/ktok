@@ -103,12 +103,15 @@ struct ChatWindowResolver {
             ensureAllFolderOnMiss: true,
             ensureAllFolderBeforeMatch: ensureAllFolderBeforeMatch
         ) {
+            restoreFolderFrontmost()
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
 
         // 2b) The visible-row scan only sees the currently-rendered rows. If the
         // Friends tab is active (or the row was not rendered yet), switch to the
         // chatrooms tab once and retry before paying for the search flow.
+        // Front-app restore stays deferred across this pass. A click here still
+        // needs KakaoTalk in front.
         activateChatroomsTab(in: searchWindow)
         let chatroomsRoot = selectSearchWindow(fallback: usableWindow)
         if let rowWindow = openVisibleExactChatRow(
@@ -118,13 +121,24 @@ struct ChatWindowResolver {
             ensureAllFolderOnMiss: true,
             ensureAllFolderBeforeMatch: ensureAllFolderBeforeMatch
         ) {
+            restoreFolderFrontmost()
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
 
+        // Clicks and visible-row rescans are done. Restore before search, which
+        // activates KakaoTalk on its own when it needs the keyboard.
+        restoreFolderFrontmost()
         // 3) Fallback: the room is not open and not visible in the list (needs
         // scrolling/search) — use the heavier search-field flow.
         let chatWindow = try openChatViaSearch(query: query, in: chatroomsRoot, fallbackWindow: usableWindow)
         return ChatWindowResolution(window: chatWindow, method: .openedViaSearch)
+    }
+
+    /// One restore after the visible-row clicks and rescans. No-op if no click was posted.
+    private func restoreFolderFrontmost() {
+        folderRecovery.restoreDeferredFrontmost { message in
+            runner.log("search-row: \(message)")
+        }
     }
 
     @discardableResult
@@ -823,8 +837,29 @@ struct ChatWindowResolver {
                 kakao: kakao,
                 runner: runner,
                 reason: "send pre-match",
+                isRetry: false,
+                deferFrontmostRestore: true,
                 trace: trace
             )
+            // Read the flags before the retry. The second click overwrites them.
+            // Rows still equal to the pre-click set means the folder did not switch.
+            // A front-app change just before the click means that click may have
+            // been spent activating the window.
+            if clicked,
+               folderRecovery.postedClickCount < 2,
+               folderRecovery.lastPostedRowsUnchanged,
+               folderRecovery.lastPostedFrontAppChanged {
+                trace("folder: All folder click again (rows unchanged, front app changed)")
+                _ = folderRecovery.ensureAllFolder(
+                    in: rootWindow,
+                    kakao: kakao,
+                    runner: runner,
+                    reason: "send pre-match retry",
+                    isRetry: true,
+                    deferFrontmostRestore: true,
+                    trace: trace
+                )
+            }
             if !clicked && !alreadyAttempted && folderRecovery.hasAttempted {
                 runner.log("search: send visible-row match skipped because All folder was not confirmed")
                 return nil
@@ -834,18 +869,37 @@ struct ChatWindowResolver {
         var matches = exactTitleMatches(in: visibleRows)
         // Unread can show a non-empty subset. Click All only when this query is
         // absent, including zero rows. Two exact titles stay ambiguous.
-        // Send calls click before this match, so they do not use the miss path.
+        // Send already clicked before this match. `isRetry: false` then returns
+        // false, so the second send click stays in the pre-match block above.
         if ensureAllFolderOnMiss && matches.isEmpty {
             let clicked = folderRecovery.ensureAllFolder(
                 in: rootWindow,
                 kakao: kakao,
                 runner: runner,
                 reason: "visible-row miss",
+                isRetry: false,
+                deferFrontmostRestore: true,
                 trace: trace
             )
             if clicked {
                 visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
                 matches = exactTitleMatches(in: visibleRows)
+                if matches.isEmpty {
+                    trace("folder: All folder click again (visible row still missing)")
+                    let again = folderRecovery.ensureAllFolder(
+                        in: rootWindow,
+                        kakao: kakao,
+                        runner: runner,
+                        reason: "visible-row miss retry",
+                        isRetry: true,
+                        deferFrontmostRestore: true,
+                        trace: trace
+                    )
+                    if again {
+                        visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
+                        matches = exactTitleMatches(in: visibleRows)
+                    }
+                }
             }
         }
 

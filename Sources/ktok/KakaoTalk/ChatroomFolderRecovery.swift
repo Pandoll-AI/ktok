@@ -9,28 +9,67 @@ import Foundation
 /// the caller's next path unchanged.
 final class ChatroomFolderRecovery {
     private var attempted = false
+    private var postedClicks = 0
+    private var savedFrontmost: NSRunningApplication?
+    private var didCaptureFrontmost = false
+    private var restorePending = false
 
     /// True after this instance has found the strip and started an attempt.
+    /// A skipped click still counts. A missing strip does not.
     var hasAttempted: Bool { attempted }
+
+    /// HID clicks posted since `resetAttempt()`. A resolve stops at 2.
+    var postedClickCount: Int { postedClicks }
+
+    /// Last posted click's settled rows still `CFEqual` the pre-click rows.
+    private(set) var lastPostedRowsUnchanged = false
+
+    /// Last posted click: frontmost just before the HID click differed from
+    /// frontmost just before that click's `activate()`. Nil on either side counts
+    /// as changed, so an unreadable front app still gets the second click.
+    private(set) var lastPostedFrontAppChanged = false
 
     /// `resolve()` calls this at entry so the next call can click again.
     func resetAttempt() {
         attempted = false
+        postedClicks = 0
+        savedFrontmost = nil
+        didCaptureFrontmost = false
+        restorePending = false
+        lastPostedRowsUnchanged = false
+        lastPostedFrontAppChanged = false
     }
 
     /// Posts one HID click on All folder. Returns true only when the click was posted.
-    /// Waits until the visible row elements change, or 0.6s if they stay the same.
-    /// After that wait, restores the app that was frontmost before activate
-    /// when it is not KakaoTalk and not already front.
+    /// `isRetry` is the second click of the same resolve, and only after one click
+    /// was posted. Any other call once `attempted` is set returns false, so the
+    /// chatrooms-tab pass does not spend a click the first pass left unused.
+    /// After the click, waits until the row elements change and then stay the same
+    /// on two polls 0.1s apart, or until 1.0s. The first difference is not enough:
+    /// activating KakaoTalk redraws the list and `CFEqual` fails while Unread is
+    /// still showing.
+    /// The app frontmost before the first `activate()` is restored after the wait,
+    /// unless `deferFrontmostRestore` is set. A skipped click does not restore.
     @discardableResult
     func ensureAllFolder(
         in window: UIElement,
         kakao: KakaoTalkApp,
         runner: AXActionRunner,
         reason: String,
+        isRetry: Bool = false,
+        deferFrontmostRestore: Bool = false,
         trace: @escaping (String) -> Void
     ) -> Bool {
-        guard !attempted else { return false }
+        if isRetry {
+            guard postedClicks == 1 else {
+                if postedClicks >= 2 {
+                    trace("folder: click budget spent")
+                }
+                return false
+            }
+        } else if attempted {
+            return false
+        }
         guard let list = Self.chatroomFolderList(in: window),
               Self.allFolderText(in: list) != nil else {
             trace("folder: chatroom folder strip absent")
@@ -38,7 +77,12 @@ final class ChatroomFolderRecovery {
         }
 
         attempted = true
-        let previousFrontmost = FrontmostApp.current()
+        let beforeActivate = FrontmostApp.current()
+        // The retry's before-activate is already KakaoTalk. Keep the user's app.
+        if !didCaptureFrontmost {
+            savedFrontmost = beforeActivate
+            didCaptureFrontmost = true
+        }
         kakao.activate()
         Thread.sleep(forTimeInterval: 0.08)
         let frontmost = runner.waitUntil(
@@ -80,23 +124,89 @@ final class ChatroomFolderRecovery {
 
         let scanner = ChatListScanner()
         let baseline = scanner.visibleRowElements(in: window, limit: 80)
+        let frontBeforeClick = FrontmostApp.current()
+        let frontChanged = Self.frontAppChanged(beforeActivate, frontBeforeClick)
         let savedCursor = CGEvent(source: nil)?.location
         let posted = runner.clickScreenPoint(target.point, label: "all-folder chip")
         if let savedCursor {
             _ = MouseEvents.move(to: savedCursor)
         }
         guard posted else { return false }
+        postedClicks += 1
         trace("folder: ensured All folder (reason=\(reason))")
-        _ = runner.waitUntil(
-            label: "all-folder rows",
-            timeout: 0.6,
-            pollInterval: 0.05,
-            evaluateAfterTimeout: false
-        ) {
-            let now = scanner.visibleRowElements(in: window, limit: 80)
-            return !Self.sameRowElements(baseline, now)
+        let settled = Self.waitForSettledRows(baseline: baseline, in: window, scanner: scanner, trace: trace)
+        lastPostedRowsUnchanged = Self.sameRowElements(baseline, settled)
+        lastPostedFrontAppChanged = frontChanged
+        if deferFrontmostRestore {
+            restorePending = true
+            trace("folder: frontmost restore deferred")
+        } else {
+            restorePending = false
+            Self.restorePreviousFrontmost(savedFrontmost, trace: trace)
         }
-        Self.restorePreviousFrontmost(previousFrontmost, trace: trace)
+        return true
+    }
+
+    /// `resolve()` calls this after both visible-row passes finish clicking and
+    /// rescanning. No-op when no click was posted, so a skip does not restore.
+    func restoreDeferredFrontmost(trace: (String) -> Void) {
+        guard restorePending else { return }
+        restorePending = false
+        Self.restorePreviousFrontmost(savedFrontmost, trace: trace)
+    }
+
+    /// Two identical polls 0.1s apart count only after the set has left `baseline`.
+    /// A set that never changes waits out the 1.0s cap. The returned snapshot is
+    /// the last one read, for the caller's unchanged-rows check.
+    private static func waitForSettledRows(
+        baseline: [UIElement],
+        in window: UIElement,
+        scanner: ChatListScanner,
+        trace: (String) -> Void
+    ) -> [UIElement] {
+        let start = Date()
+        var previous: [UIElement]?
+        var stableStreak = 0
+        var sawChange = false
+        var latest = baseline
+        while true {
+            let now = scanner.visibleRowElements(in: window, limit: 80)
+            latest = now
+            if !sameRowElements(baseline, now) {
+                sawChange = true
+            }
+            if let previous, sameRowElements(previous, now) {
+                stableStreak += 1
+            } else {
+                stableStreak = 1
+            }
+            previous = now
+            if sawChange && stableStreak >= 2 {
+                trace("folder: all-folder rows stable")
+                return latest
+            }
+            let elapsed = Date().timeIntervalSince(start)
+            if elapsed >= 1.0 {
+                trace("folder: all-folder rows timeout changed=\(sawChange ? 1 : 0)")
+                return latest
+            }
+            Thread.sleep(forTimeInterval: min(0.1, 1.0 - elapsed))
+        }
+    }
+
+    /// True when the front app changed. Pid or bundle id match means the same app.
+    /// A nil side is treated as changed.
+    private static func frontAppChanged(
+        _ before: NSRunningApplication?,
+        _ after: NSRunningApplication?
+    ) -> Bool {
+        guard let before, let after else { return true }
+        if before.processIdentifier == after.processIdentifier { return false }
+        if let left = before.bundleIdentifier,
+           let right = after.bundleIdentifier,
+           left == right {
+            return false
+        }
         return true
     }
 
