@@ -8,10 +8,10 @@
 
 ### Changed — 리팩토(속도·불필요 로직 제거) (2026-10-08)
 
-- 레거시 저장소 마이그레이션은 같은 프로세스·같은 홈·같은 계정 alias에서 한 번만 실행한다. alias가 없거나 바뀌면 본문을 다시 돌려 디렉터리 생성과 레거시 복사를 유지한다.
-- `current-account.json` 디코드는 프로세스 메모리에 한 벌만 둔다. `save`, `clear`, 마이그레이션 본문 시작에서 무효화한다.
-- `ktok channel daemon`은 sqlite `ChannelStore`를 프로세스당 한 번 연다. `poll-once`는 호출마다 자기 연결을 연다. 열기 실패 시 폴 오류를 찍고 `status()`에서 종료하는 동작은 유지한다.
-- `read` 입력 필드 탐색은 포커스 창과 대상 창이 같은 AX 원소일 때 트리를 한 번만 걷는다. 제목·프레임만 비슷하면 두 번 유지한다.
+- 레거시 저장소 마이그레이션은 같은 홈·같은 alias·같은 계정 파일 stamp(mtime, size, inode)에서 한 번만 실행한다. 파일이 생기거나 stamp가 바뀌면 본문을 다시 돌린다. `save`와 `clear`는 이 가드를 리셋해 같은 alias의 디렉터리 생성을 다시 탄다.
+- `current-account.json`은 읽기마다 stat 1회로 캐시를 맞춘다. 다른 프로세스의 login, logout, config import가 오래 떠 있는 프로세스의 다음 읽기에 반영된다. `save`, `clear`, 마이그레이션 본문 시작에서도 캐시를 비운다.
+- `ktok channel daemon`은 sqlite 연결을 재사용한다. db 파일의 inode·mtime이 바뀌거나 poll이 실패하면 연결을 버리고 다시 연다. `status()`가 실패하면 한 번 재오픈하고, 그것도 실패하면 종료한다. `poll-once`는 호출마다 자기 연결을 연다. AX 권한이 없으면 sqlite를 만들기 전에 안내하고 종료한다.
+- `read` 입력 필드 탐색은 포커스 창과 대상 창이 같은 AX 원소이고 그 창 탐색이 실제로 돌았을 때만 트리를 한 번 걷는다. title/frame 비교가 실패하면 대상 창을 그대로 탐색한다.
 - 채팅 목록 컨테이너 캐시 미스는 table, outline, list 탐색을 BFS 한 번으로 합친다. 우선순위는 table → outline → list.
 - 호출되지 않던 private 함수와 정의만 있던 심볼을 삭제했다. `ktok monitor`의 fail-closed 메시지, 종료, 플래그는 유지하고 레거시 본문만 제거했다.
 - `Thread.sleep` 값, `LegacyRoomsFile` 폴백, 레거시 복사 자체, 진단 커맨드(`inspect`, `dump-chat-ui`, `cache`)는 그대로다.

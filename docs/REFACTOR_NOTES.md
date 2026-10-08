@@ -72,10 +72,10 @@
 
 ### 적용
 
-- `KtokPaths.migrateLegacyStorageIfNeeded` (`Storage/KtokPaths.swift:173`, 호출 `108`·`116`·`124`, `LoginAccountState.read:321`, `ChatIdentityRegistry.defaultURL:317`). `ensureWorkspace` 와 `copyIfNeeded` 가 호출마다 `fileExists` 를 반복한다. 계정 alias 가 바뀌기 전에는 본문을 건너뛴다. alias 가 없어 방 복사를 못 한 경우에는 계정 파일이 생긴 뒤 한 번 더 돌린다. 디렉터리 생성은 alias 가 바뀔 때 유지한다.
-- `LoginAccountState.readWithoutMigration` (`Login/LoginEnvironment.swift:325`). `ChatIdentityRecord.init` 이 레코드마다 `ChatAccountContext.active()` → `read()` 를 호출해 `current-account.json` 을 다시 디코드한다. `ktok login` 상태 출력도 같은 파일을 세 번 읽는다 (`Commands/LoginCommand.swift:196-203`). 경로별로 프로세스 메모리에 두고, `save` / `clear` / 마이그레이션 시작 때 무효화한다.
-- `ChannelDaemonCommand` 가 사이클마다 `ChannelStore` 를 두 번 연다 (`poll.run` 내부와 `status()`). 프로세스당 연결 하나, `migrate()` SQL 은 기동 시 한 번.
-- `MessageContextResolver.resolveMessageInputField` (`KakaoTalk/MessageContextResolver.swift:74-82`). 포커스 창과 채팅 창이 같은 AX 원소여도 `collectMessageInputCandidates` 를 두 번 호출한다. `SendCommand` 는 이미 `CFEqual` 이면 한 번만 걷는다. 같은 가드를 읽기 경로에 넣는다. 원소가 다르면 두 번 유지.
+- `KtokPaths.migrateLegacyStorageIfNeeded` (`Storage/KtokPaths.swift:173`, 호출 `108`·`116`·`124`, `LoginAccountState.read:321`, `ChatIdentityRegistry.defaultURL:317`). `ensureWorkspace` 와 `copyIfNeeded` 가 호출마다 `fileExists` 를 반복한다. 같은 홈·alias·계정 파일 stamp(mtime, size, inode, 파일 없음 포함)에서는 본문을 건너뛴다. stamp가 바뀌거나 alias가 생기면 본문을 다시 실행한다. `save` / `clear` 는 가드를 리셋한다.
+- `LoginAccountState.readWithoutMigration` (`Login/LoginEnvironment.swift:325`). `ChatIdentityRecord.init` 이 레코드마다 `ChatAccountContext.active()` → `read()` 를 호출해 `current-account.json` 을 다시 디코드한다. `ktok login` 상태 출력도 같은 파일을 세 번 읽는다 (`Commands/LoginCommand.swift:196-203`). 경로와 파일 stamp가 같으면 디코드를 생략한다. 읽기마다 stat 1회. 다른 프로세스의 login, logout, config import는 다음 읽기에서 보인다. `save` / `clear` / 마이그레이션 시작에서도 캐시를 비운다.
+- `ChannelDaemonCommand` 가 사이클마다 `ChannelStore` 를 두 번 연다 (`poll.run` 내부와 `status()`). 파일 stamp가 같은 동안 연결 하나를 재사용한다. db inode·mtime이 바뀌거나 poll이 실패하면 버리고 다시 연다. `status()` 실패는 한 번 재오픈하고, 그것도 실패하면 종료한다. `poll-once` 는 AX 권한 확인 뒤에 sqlite를 연다.
+- `MessageContextResolver.resolveMessageInputField` (`KakaoTalk/MessageContextResolver.swift:74-82`). 포커스 창과 채팅 창이 같은 AX 원소여도 `collectMessageInputCandidates` 를 두 번 호출한다. 같은 원소이고 포커스 창 탐색이 실제로 돌았을 때만 두 번째 트리를 생략한다. title/frame 읽기가 실패하면 대상 창을 그대로 탐색한다.
 - `ChatListScanner.resolveChatListContainer` (`KakaoTalk/ChatListScanner.swift:197-200`). 캐시 미스마다 table / outline / list 를 `maxNodes: 220` 으로 세 번 BFS 한다. 기존 `UIElement.findAll(roles:roleLimits:maxNodes:)` 한 번으로 역할별 첫 원소를 고르고, 우선순위(table → outline → list)는 그대로 둔다.
 - 미사용 심볼. 저장소 전체(swift·sh·md 본문)에서 정의 외 참조가 없다. CHANGELOG 의 과거 문장은 이력으로 남긴다.
   - `WatchCommand.findOverlapCount` (`Commands/WatchCommand.swift:558`) — `findOverlap` 만 사용
@@ -118,22 +118,20 @@
 
 ## 4. 검증
 
-코드 커밋은 `740cf1a` dead code, `9a4a9d5` paths, `8d863c5` resolver, `6d49970` channel daemon. 이 절과 CHANGELOG는 그 다음 커밋이다.
+코드 커밋은 `740cf1a` dead code, `9a4a9d5` paths, `8d863c5` resolver, `6d49970` channel daemon이다. 리뷰 반영은 `b6348c5` read, `ae1ac28` account stat, `699cec9` daemon reopen, `7bb5c30` poll-once 권한 순서, `ff75e9b` gate reset. 이 절과 CHANGELOG는 그 다음 커밋이다.
 
-`swift build -c release`는 각 코드 커밋 전에 통과했다. 경고는 기존 두 종류뿐이다. `LoginCommand.swift`의 `String?` → `Any` 암시 변환, `SecretStore.swift:85`의 `SecKeychainOpen` deprecation. 새로 늘어난 경고는 없다. 마지막 코드 빌드 꼬리: `Build complete! (21.79 sec)`.
+`swift build -c release`는 각 코드 커밋 전에 통과했다. 경고는 기존 두 종류뿐이다. `LoginCommand.swift`의 `String?` → `Any` 암시 변환, `SecretStore.swift:85`의 `SecKeychainOpen` deprecation. 새로 늘어난 경고는 없다. 마지막 코드 빌드 꼬리: `Build complete! (20.46 sec)`.
 
-`KTOK_BIN=.build/release/ktok bash scripts/test-bot-room-selector.sh`는 카카오톡 없이 통과했다. `passed=20 failed=0`. `ktok monitor is inactive` 검사를 포함한다.
+`KTOK_BIN=.build/release/ktok bash scripts/test-bot-room-selector.sh`는 리뷰 반영 뒤 카카오톡 없이 다시 통과했다. `passed=20 failed=0`. `ktok monitor is inactive` 검사를 포함한다.
 
 속도는 실측하지 않았다. 줄인 것은 호출 횟수다.
 
-- `migrateLegacyStorageIfNeeded`의 `ensureWorkspace`와 `fileExists`는 같은 홈·alias에서 매 호출에서 프로세스당 1회로 준다. alias가 없으면 그 상태를 기억하고, 계정 파일이 생긴 뒤 본문을 다시 실행한다.
-- `current-account.json` 디코드는 같은 경로의 반복 `read` / `readWithoutMigration`에서 무효화 전까지 1회다.
-- daemon 사이클의 `ChannelStore` open과 `migrate()` SQL은 사이클당 2회에서 프로세스당 1회다. `poll-once`는 호출마다 1회다.
+- `migrateLegacyStorageIfNeeded`의 `ensureWorkspace`와 `fileExists`는 같은 홈·alias·계정 파일 stamp에서 프로세스당 1회다. 파일이 생기거나 stamp가 바뀌면 본문을 다시 실행한다. `save` / `clear`는 가드를 리셋한다.
+- `current-account.json` 디코드는 stamp가 같은 동안 1회다. 읽기마다 stat 1회. 외부 login, logout, import는 다음 읽기에서 반영된다.
+- daemon의 `ChannelStore` open과 `migrate()` SQL은 db stamp가 같은 동안 프로세스당 1회다. 파일이 바뀌거나 poll/`status()`가 실패하면 다시 연다. `poll-once`는 호출마다 1회이고, AX 권한이 없으면 sqlite를 열지 않는다.
 - 채팅 목록 컨테이너 캐시 미스의 role BFS는 3회에서 1회다.
-- `read` 입력 후보 탐색은 포커스 창과 대상 창이 `CFEqual`일 때 2회에서 1회다. 원소가 다르면 2회다.
+- `read` 입력 후보 탐색은 포커스 창과 대상 창이 `CFEqual`이고 포커스 창 탐색이 돌았을 때 2회에서 1회다. title/frame 비교가 실패하면 대상 창을 탐색해 후보가 비지 않는다.
 
 실측은 카카오톡이 떠 있는 맥에서 `time ktok channel daemon --json --max-loops 1`, `time ktok chats --json`, `time ktok read --json`을 리팩토 전후 바이너리로 비교하면 된다. 이 세션에서는 AX를 조작하지 않아 재지 않았다.
 
-보류는 2절과 같다. 다른 프로세스가 `current-account.json`을 바꿔도 이 프로세스의 계정 캐시는 `save`, `clear`, 마이그레이션 본문이 돌기 전까지 유지된다. 한 번 실행되는 CLI는 프로세스가 끝나며 캐시가 사라지고, 오래 떠 있는 `channel daemon`, `bot run`, `mcp-server`는 계정 전환 뒤 재시작이 필요하다.
-
-마이그레이션 가드 키는 홈 경로와 alias다. 같은 프로세스에서 `KTOK_HOME`이 바뀌면 본문을 다시 실행한다.
+보류는 2절과 같다. 오래 떠 있는 `channel daemon`, `bot run`, `mcp-server`도 계정 파일 stamp가 바뀌면 다음 읽기에서 새 alias를 본다. 재시작은 필요 없다. `KTOK_HOME`이 바뀌면 마이그레이션 본문을 다시 실행한다.
