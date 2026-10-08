@@ -17,7 +17,7 @@
 
 - 채팅 목록 스캔은 `chatRowTitle`을 읽지 않는다. 제목은 행의 AXTitle이 있으면 그 값이고, 없으면 정적 텍스트 BFS(최대 12개, 80노드)에서 시각·안 읽음 수가 아닌 첫 노드다. 캐시가 없을 때의 선택과 같다.
 - `chatRowTitle`과 `chatRowPreview`의 저장·만료·stale 제거는 스캔 동안 메모리만 바꾸고 스캔 끝에 한 번 쓴다. 경로가 같으면 쓰지 않는다. trace는 `persist=deferred` 또는 `persist=1`, 그리고 `cache: persist writes=N deferred=M`이다.
-- `cache warmup`은 첫 행에서 고른 제목 원소를 `chatRowTitle`에 한 번 기록한다. 미리보기 원소를 고르는 순서는 그대로다.
+- `cache warmup`은 `chatRowTitle`을 쓰지 않는다. 스캔이 그 슬롯을 읽지 않는다. 슬롯 이름은 예전 캐시 파일을 디코드하려고 남겨 둔다. 미리보기 원소를 고르는 순서는 그대로다.
 
 ### Fixed — 채팅방 폴더가 Unread일 때 대상 방이 빠지는 문제 (2026-10-08)
 

@@ -256,10 +256,8 @@ struct ChatListScanner {
 
         var warmedSlots: [AXPathSlot] = [.chatListContainer]
         if let firstRow = collectChatItems(from: container, limit: 1).first {
-            if let title = extractTitleElement(from: firstRow) {
-                AXPathCacheStore.shared.remember(slot: .chatRowTitle, root: firstRow, element: title.element, trace: trace)
-                warmedSlots.append(.chatRowTitle)
-            }
+            // chatRowTitle stays in the schema so older cache files still decode.
+            // Nothing reads it. An image row and a plain row do not share a child index.
             if extractPreviewElement(from: firstRow, title: extractTitle(from: firstRow, trace: trace), trace: trace)?.element != nil {
                 warmedSlots.append(.chatRowPreview)
             }
