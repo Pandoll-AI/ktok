@@ -3,8 +3,10 @@ import ApplicationServices.HIServices
 import Foundation
 
 /// KakaoTalk 26.x folder chips have no AXPress and reject AXSelected.
-/// Selection is not exposed. A click is posted only after the chip frame is
-/// re-read on a visible frontmost window and the point hits the folder strip.
+/// Selection is not exposed. A click is posted only after AXRaise on the chat
+/// list window, the chip frame is re-read, and the point hits the folder strip.
+/// A failed raise still continues. A skipped click returns false and leaves
+/// the caller's next path unchanged.
 final class ChatroomFolderRecovery {
     private var attempted = false
 
@@ -51,13 +53,16 @@ final class ChatroomFolderRecovery {
             trace("folder: All folder click skipped because KakaoTalk is not frontmost")
             return false
         }
-
-        guard let point = Self.clickPointAfterActivation(in: window) else {
-            trace("folder: All folder chip frame missing after activate")
-            return false
-        }
+        // Raise can unminimize. Refuse that before AXRaise so a minimized list
+        // window is not brought up just to click the chip.
         guard Self.minimizedIsFalse(window) else {
             trace("folder: All folder click skipped because AXMinimized is not false")
+            return false
+        }
+        Self.raiseMainWindow(window, trace: trace)
+
+        guard let point = Self.clickPointAfterActivation(in: window) else {
+            trace("folder: All folder chip frame missing after raise")
             return false
         }
         guard Self.pointHitsChatroomFolder(point) else {
@@ -86,7 +91,22 @@ final class ChatroomFolderRecovery {
         return true
     }
 
-    /// Frame is read after activate. The pre-activate frame can sit on another window.
+    /// A chat window can cover the list. Failure still falls through to the frame read.
+    private static func raiseMainWindow(_ window: UIElement, trace: (String) -> Void) {
+        do {
+            let actions = try window.actionNames()
+            guard actions.contains(kAXRaiseAction) else {
+                trace("folder: AXRaise unavailable, continuing")
+                return
+            }
+            try window.performAction(kAXRaiseAction)
+            trace("folder: raised chat list window")
+        } catch {
+            trace("folder: AXRaise failed (\(error)), continuing")
+        }
+    }
+
+    /// Frame is read after AXRaise. The pre-raise frame can belong to a covered chip.
     private static func clickPointAfterActivation(in window: UIElement) -> CGPoint? {
         guard let list = chatroomFolderList(in: window),
               let chip = allFolderText(in: list) else {

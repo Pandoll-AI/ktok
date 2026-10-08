@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Fixed — All folder 클릭 전에 채팅 목록 창을 올린다 (2026-10-08)
+
+- 앞창이고 `AXMinimized`가 false일 때만 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창은 올리지 않는다. Raise가 없거나 실패해도 클릭 판단은 계속한다.
+- 그 다음 칩 frame을 다시 읽고 hit-test 한다. 채팅창이 칩을 덮어 좌표가 거부되는 경우를 줄인다. 클릭이 나가지 않으면 반환은 false이고, 호출부의 다음 경로는 바꾸지 않는다.
+
 ### Fixed — 영문 채팅 목록 시각을 방 제목으로 읽지 않음 (2026-10-08)
 
 - `ChatTextNormalizer.isTimeLikeValue`가 영문 월·일(`Jun 10`, `Jun 10, 2025`), `h:mm AM/PM`, `오전/오후 h:mm`, `Yesterday`/`Today`/`오늘`, 요일명(영문 전체·3글자, 한글 `월요일` 등), `yyyy. m. d.`, `m/d/yy`, `yyyy-mm-dd`를 시각으로 본다. 정규식은 static let으로 한 번만 컴파일한다.
