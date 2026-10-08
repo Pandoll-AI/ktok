@@ -558,7 +558,15 @@ struct ChannelDaemonCommand: ParsableCommand {
         var storeStamp: DBIdentity?
         while true {
             loops += 1
+            var blockedOnPermission = false
             do {
+                // No sqlite until Accessibility is granted. Instructions and ExitCode.failure
+                // match poll-once; this loop prints the error and sleeps instead of exiting.
+                guard AccessibilityPermission.ensureGranted() else {
+                    AccessibilityPermission.printInstructions()
+                    blockedOnPermission = true
+                    throw ExitCode.failure
+                }
                 let active = try reusableStore(&store, stamp: &storeStamp)
                 var poll = ChannelPollOnceCommand()
                 poll.allMonitored = true
@@ -579,27 +587,33 @@ struct ChannelDaemonCommand: ParsableCommand {
             }
 
             if let maxLoops, loops >= maxLoops { break }
-            let status: ChannelStatus
-            do {
-                let statusStore = try reusableStore(&store, stamp: &storeStamp)
-                status = try statusStore.status()
-            } catch {
-                // Dead connection (replaced sqlite, IOERR, READONLY_DBMOVED): drop it and open once more.
-                // Stamp the path before open so a replace during open is seen next cycle.
-                store = nil
-                storeStamp = nil
-                let before = DBIdentity.capture(Self.channelDatabasePath())
-                let fresh = try ChannelStore()
-                status = try fresh.status()
-                store = fresh
-                storeStamp = before
+            let nextSeconds: Int
+            if blockedOnPermission {
+                nextSeconds = ChannelSchedule.nextIntervalSeconds(lastActivityAtISO: nil)
+            } else {
+                let status: ChannelStatus
+                do {
+                    let statusStore = try reusableStore(&store, stamp: &storeStamp)
+                    status = try statusStore.status()
+                } catch {
+                    // Dead connection (replaced sqlite, IOERR, READONLY_DBMOVED): drop it and open once more.
+                    // Stamp the path before open so a replace during open is seen next cycle.
+                    store = nil
+                    storeStamp = nil
+                    let before = DBIdentity.capture(Self.channelDatabasePath())
+                    let fresh = try ChannelStore()
+                    status = try fresh.status()
+                    store = fresh
+                    storeStamp = before
+                }
+                nextSeconds = status.nextIntervalSeconds
             }
             if json {
-                KtokWorkspaceStore.printJSON(["event": "sleep", "seconds": status.nextIntervalSeconds])
+                KtokWorkspaceStore.printJSON(["event": "sleep", "seconds": nextSeconds])
             } else {
-                print("sleeping \(status.nextIntervalSeconds)s")
+                print("sleeping \(nextSeconds)s")
             }
-            Thread.sleep(forTimeInterval: TimeInterval(status.nextIntervalSeconds))
+            Thread.sleep(forTimeInterval: TimeInterval(nextSeconds))
         }
     }
 
