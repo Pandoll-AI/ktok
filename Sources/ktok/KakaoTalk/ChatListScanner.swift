@@ -24,9 +24,9 @@ enum ChatTextNormalizer {
         return String(scalars)
     }
 
-    /// English month + day, optional year. Compiled once.
+    /// Optional weekday, then English month + day, optional year. Compiled once.
     private static let englishMonthDay = compileTimePattern(
-        #"^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?$"#
+        #"^(?:(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday),\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?$"#
     )
     /// "h:mm AM/PM", optional space.
     private static let clockWithMeridiem = compileTimePattern(
@@ -44,13 +44,14 @@ enum ChatTextNormalizer {
     private static let weekdayName = compileTimePattern(
         #"^(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|wed|thu|fri|sat|일요일|월요일|화요일|수요일|목요일|금요일|토요일)$"#
     )
-    /// "yyyy. m. d.", "m/d/yy", "yyyy-mm-dd".
+    /// "yyyy. m. d.", "yy. m. d.", "m/d", "m/d/yy", "yyyy-mm-dd".
     private static let numericDate = compileTimePattern(
-        #"^(?:\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{1,2}-\d{1,2})$"#
+        #"^(?:\d{2,4}\.\s*\d{1,2}\.\s*\d{1,2}\.?|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2})$"#
     )
-    /// "N일", "M월 D일", "yyyy년 M월 D일", "N일 전". Not every string that ends in 일.
+    /// "N일", "M월 D일", "yyyy년 M월 D일", optional weekday, "N일 전".
+    /// A name such as 차명일 has no leading number, so it stays a title.
     private static let koreanDayLabel = compileTimePattern(
-        #"^(?:\d{1,2}일|\d{1,2}월\s*\d{1,2}일|\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{1,2}일\s*전)$"#
+        #"^(?:\d{1,2}일(?:\s*전)?|(?:\d{4}년\s*)?\d{1,2}월\s*\d{1,2}일(?:\s*(?:일요일|월요일|화요일|수요일|목요일|금요일|토요일))?)$"#
     )
 
     private static func compileTimePattern(_ pattern: String) -> NSRegularExpression {
