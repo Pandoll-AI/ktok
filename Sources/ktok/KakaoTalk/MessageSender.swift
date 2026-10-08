@@ -77,21 +77,23 @@ enum MessageSender {
         return sent
     }
 
-    /// Reactivate the app that was frontmost before a foreground send. No-op if
-    /// the user already moved to another app or that app is KakaoTalk itself.
+    /// Reactivate the app that was frontmost before a foreground send. Only when
+    /// KakaoTalk is in front right now (we took focus) and the saved app is a
+    /// regular app; no-op if focus is unknown, the user already moved elsewhere,
+    /// or the saved app was a system UI (Spotlight, Control Center, Dock, …).
     static func restoreFrontmostApp(_ app: NSRunningApplication?, runner: AXActionRunner) {
         guard let app,
               app.bundleIdentifier != KakaoTalkApp.bundleIdentifier,
+              app.activationPolicy == .regular,
               !app.isTerminated
         else { return }
-        if let current = FrontmostApp.current(),
-           current.bundleIdentifier != KakaoTalkApp.bundleIdentifier {
-            return
-        }
+        guard let current = FrontmostApp.current(),
+              current.bundleIdentifier == KakaoTalkApp.bundleIdentifier
+        else { return }
         runner.log("send: restoring foreground app '\(app.bundleIdentifier ?? "?")'")
         app.activate(options: [.activateIgnoringOtherApps])
         _ = runner.waitUntil(label: "restore frontmost", timeout: 0.25, pollInterval: 0.05) {
-            FrontmostApp.current()?.bundleIdentifier == app.bundleIdentifier
+            FrontmostApp.current()?.processIdentifier == app.processIdentifier
         }
     }
 }
