@@ -520,7 +520,7 @@ struct ChannelPollOnceCommand: ParsableCommand {
                 let message = String(describing: error)
                 let hint: String
                 if message.contains("SEARCH_MISS") {
-                    hint = "KakaoTalk search field was not exposed. Open the Chats tab/window or an existing target chat once, then retry; queue commands remain usable."
+                    hint = "Chat not found in the KakaoTalk chat list or search (SEARCH_MISS). Check that the logged-in account is still in this room; queue commands remain usable. Underlying error: \(message)"
                 } else {
                     hint = message
                 }
