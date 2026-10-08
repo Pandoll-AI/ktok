@@ -99,15 +99,36 @@ struct ChatsCommand: ParsableCommand {
         }
 
         let scanner = ChatListScanner()
+        let folderRecovery = ChatroomFolderRecovery()
+        let trace: (String) -> Void = { message in
+            runner.log(message)
+        }
         let snapshots: [ChatListSnapshotItem]
         if let limit {
-            snapshots = scanner.scan(in: mainWindow, limit: limit, trace: { message in
-                runner.log(message)
-            })
+            let scanned = scanner.scan(in: mainWindow, limit: limit, trace: trace)
+            snapshots = folderRecovery.recoverIfEmpty(
+                rows: scanned,
+                window: mainWindow,
+                kakao: kakao,
+                runner: runner,
+                limit: limit,
+                trace: trace
+            )
         } else {
-            snapshots = scanner.scanAll(in: mainWindow, trace: { message in
-                runner.log(message)
-            })
+            let scanned = scanner.scanAll(in: mainWindow, trace: trace)
+            if !scanned.isEmpty {
+                snapshots = scanned
+            } else {
+                let recovered = folderRecovery.recoverIfEmpty(
+                    rows: scanned,
+                    window: mainWindow,
+                    kakao: kakao,
+                    runner: runner,
+                    limit: 1,
+                    trace: trace
+                )
+                snapshots = recovered.isEmpty ? [] : scanner.scanAll(in: mainWindow, trace: trace)
+            }
         }
 
         if snapshots.isEmpty {

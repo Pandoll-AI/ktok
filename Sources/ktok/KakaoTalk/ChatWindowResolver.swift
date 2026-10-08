@@ -66,6 +66,7 @@ struct ChatWindowResolver {
     private let runner: AXActionRunner
     private let useCache: Bool
     private let deepRecoveryEnabled: Bool
+    private let folderRecovery = ChatroomFolderRecovery()
 
     init(
         kakao: KakaoTalkApp,
@@ -97,7 +98,8 @@ struct ChatWindowResolver {
         if let rowWindow = openVisibleExactChatRow(
             query: query,
             rootWindow: searchWindow,
-            fallbackWindow: usableWindow
+            fallbackWindow: usableWindow,
+            recoverEmptyFolder: true
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -110,7 +112,8 @@ struct ChatWindowResolver {
         if let rowWindow = openVisibleExactChatRow(
             query: query,
             rootWindow: chatroomsRoot,
-            fallbackWindow: usableWindow
+            fallbackWindow: usableWindow,
+            recoverEmptyFolder: true
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -793,10 +796,26 @@ struct ChatWindowResolver {
         return resolved ?? resolveOpenedChatWindow(query: query, fallbackWindow: fallbackWindow)
     }
 
-    private func openVisibleExactChatRow(query: String, rootWindow: UIElement, fallbackWindow: UIElement) -> UIElement? {
+    private func openVisibleExactChatRow(
+        query: String,
+        rootWindow: UIElement,
+        fallbackWindow: UIElement,
+        recoverEmptyFolder: Bool = false
+    ) -> UIElement? {
         runner.log("resolve: probing visible chat-list rows by exact title")
-        let visibleRows = ChatListScanner().scan(in: rootWindow, limit: 80) { message in
+        let trace: (String) -> Void = { message in
             runner.log("search-row: \(message)")
+        }
+        var visibleRows = ChatListScanner().scan(in: rootWindow, limit: 80, trace: trace)
+        if recoverEmptyFolder {
+            visibleRows = folderRecovery.recoverIfEmpty(
+                rows: visibleRows,
+                window: rootWindow,
+                kakao: kakao,
+                runner: runner,
+                limit: 80,
+                trace: trace
+            )
         }
         let matches = visibleRows.filter { snapshot in
             scoreQueryMatch(query: query, candidateText: snapshot.discovery.title) > 0
