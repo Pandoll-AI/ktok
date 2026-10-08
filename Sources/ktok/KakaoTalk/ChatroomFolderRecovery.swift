@@ -54,22 +54,27 @@ final class ChatroomFolderRecovery {
         }
         guard frontmost else {
             trace("folder: All folder click skipped because KakaoTalk is not frontmost")
+            Self.reportClickSkipped("not frontmost")
             return false
         }
         // Raise can unminimize. Refuse that before AXRaise so a minimized list
         // window is not brought up just to click the chip.
         guard Self.minimizedIsFalse(window) else {
             trace("folder: All folder click skipped because AXMinimized is not false")
+            Self.reportClickSkipped("minimized")
             return false
         }
         Self.raiseMainWindow(window, trace: trace)
 
         guard let target = Self.clickTargetAfterActivation(in: window) else {
             trace("folder: All folder chip frame missing after raise")
+            Self.reportClickSkipped("chip frame missing")
             return false
         }
-        guard Self.pointHitsAllChip(target.point, chip: target.chip) else {
+        let hit = Self.hitOnAllChip(target.point, chip: target.chip)
+        guard hit.matches else {
             trace("folder: All folder click skipped because the point is not the All folder chip")
+            Self.reportClickSkipped("hit-test refused \(Self.describeHit(hit.element))")
             return false
         }
 
@@ -147,25 +152,59 @@ final class ChatroomFolderRecovery {
         return minimized == false
     }
 
+    private struct ChipHit {
+        let matches: Bool
+        let element: UIElement?
+    }
+
     /// The hit element itself, or an ancestor within 4 steps, must be the chip
     /// we are about to click. A sibling Unread chip shares the folder list and
     /// must not pass.
-    private static func pointHitsAllChip(_ point: CGPoint, chip: UIElement) -> Bool {
+    private static func hitOnAllChip(_ point: CGPoint, chip: UIElement) -> ChipHit {
         let system = UIElement(AXUIElementCreateSystemWide())
-        guard let hit = try? system.element(at: point) else { return false }
+        guard let hit = try? system.element(at: point) else {
+            return ChipHit(matches: false, element: nil)
+        }
         if CFEqual(hit.axElement, chip.axElement) {
-            return true
+            return ChipHit(matches: true, element: hit)
         }
         var node = hit.parent
         var steps = 0
         while let current = node, steps < 4 {
             steps += 1
             if CFEqual(current.axElement, chip.axElement) {
-                return true
+                return ChipHit(matches: true, element: hit)
             }
             node = current.parent
         }
-        return false
+        return ChipHit(matches: false, element: hit)
+    }
+
+    /// Always stderr, including when `--trace-ax` is off. One line, stdout untouched.
+    private static func reportClickSkipped(_ reason: String) {
+        let line = "ktok: all-folder click skipped: \(oneLine(reason))\n"
+        guard let data = line.data(using: .utf8) else { return }
+        FileHandle.standardError.write(data)
+    }
+
+    /// AXTitle when set. Folder chips often keep the label in AXValue instead.
+    private static func describeHit(_ element: UIElement?) -> String {
+        guard let element else { return "role=? title=?" }
+        return "role=\(oneLine(element.role ?? "?")) title=\(oneLine(hitLabel(element)))"
+    }
+
+    private static func hitLabel(_ element: UIElement) -> String {
+        if let title = element.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let value = element.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            return value
+        }
+        return "?"
+    }
+
+    private static func oneLine(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
     }
 
     private static func sameRowElements(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {

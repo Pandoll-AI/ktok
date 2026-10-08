@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Changed — All folder 클릭을 건너뛴 사유를 stderr에 남긴다 (2026-10-08)
+
+- 앞창이 아님, 최소화, 칩 frame 없음, hit-test 거부는 `--trace-ax`와 상관없이 stderr 한 줄이다. `ktok: all-folder click skipped: <사유>`.
+- hit-test 거부는 히트 원소의 role과 title을 붙인다. title이 비어 있으면 AXValue를 쓴다. 원소가 없으면 `role=? title=?`다. stdout JSON은 그대로다.
+
 ### Fixed — All folder 클릭 뒤에 이전 앞창 앱을 되돌린다 (2026-10-08)
 
 - `activate()` 전에 `NSWorkspace.shared.frontmostApplication`을 저장한다. 클릭이 나가고 행 대기가 끝난 뒤, 그 앱이 KakaoTalk이 아니고 이미 앞이 아니면 `activate()`로 되돌린다.
