@@ -50,7 +50,7 @@ struct SendImageCommand: ParsableCommand {
 
         do {
             print("Looking for chat with '\(recipient)'...")
-            let resolution = try chatWindowResolver.resolve(query: recipient)
+            let resolution = try chatWindowResolver.resolve(query: recipient, ensureAllFolderBeforeMatch: true)
 
             try sendImageToWindow(imageURL, window: resolution.window, kakao: kakao, runner: runner)
             closeWindowsIfNeeded(

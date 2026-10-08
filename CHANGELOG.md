@@ -31,6 +31,11 @@
 - 클릭 좌표는 `AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), x, y)`로 확인하고, 그 원소의 부모를 최대 10단계 올라가 `Chatroom folder` AXList가 있을 때만 누른다. 아니면 클릭하지 않고 trace를 남긴다.
 - 클릭 전 `CGEvent(source: nil)?.location`을 저장하고, 클릭 뒤 mouseMoved로 커서를 그 자리에 되돌린다.
 
+### Fixed — send는 All folder를 확인한 뒤 동명 판정을 한다 (2026-10-08)
+
+- `resolve(ensureAllFolderBeforeMatch:)`는 폴더 줄이 있으면 보이는 행을 고르기 전에 All folder를 한 번 누른다. `send`, `send-image`, `send-file`, bot의 방 열기, 그리고 그 명령을 부르는 MCP send 도구가 켠다. `read`와 `watch`, `channel poll`은 대상이 없을 때만 누른다.
+- 클릭이 나갔는데 행 원소가 0.6초 안에 안 바뀌면 이미 All이었다고 보고 동명 판정을 진행한다. 줄은 있는데 클릭이 나가지 않으면 그 부분집합으로 방을 고르지 않는다.
+
 ### Changed — 전체 채팅 스캔이 같은 행을 반복해서 읽지 않음 (2026-10-08)
 
 - `scanAll`은 패스마다 행 원소를 순서대로 `CFEqual` 비교한다. 같으면 제목·미리보기를 다시 읽지 않고 stable로 센다. 원소가 바뀌면 기존처럼 추출한다.

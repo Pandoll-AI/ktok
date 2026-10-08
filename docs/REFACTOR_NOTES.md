@@ -160,6 +160,10 @@ Unread는 비어 있지 않을 수 있다. 안 읽은 방이 있으면 그 행�
 
 앞창 확인 뒤에 칩 frame을 다시 읽는다. 메인 창 `AXMinimized`가 false이고, 그 좌표의 시스템 히트 원소 부모 체인(최대 10단계)에 `Chatroom folder` AXList가 있을 때만 누른다. 하나라도 아니면 클릭하지 않고 trace를 남긴다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다.
 
+`send`, `send-image`, `send-file`, bot이 방을 열 때, 그리고 그 명령을 실행하는 MCP send는 `ensureAllFolderBeforeMatch`로 보이는 행 판정 전에 All을 한 번 누른다. read 계열은 대상이 없을 때만 누른다. 줄이 있는데 클릭이 나가지 않으면 그때 보이는 행으로 수취인을 고르지 않는다.
+
+[ASSUMPTION] 클릭이 나간 뒤 행 원소 집합이 0.6초 안에 바뀌지 않으면 이미 All이었다고 보고 동명 판정을 진행한다. 검증: 운영 맥에서 All이 선택된 상태로 `ktok send`를 실행해, trace 대기 뒤 같은 방이 열리는지 본다.
+
 ## 8. 전체 스캔의 같은 행 (2026-10-08)
 
 26행이 한 번에 노출되면 `stablePasses >= 3`이 같은 행의 제목·미리보기를 세 번 더 읽는다. 패스 시작에 행 원소를 순서대로 `CFEqual`한다. 첫·마지막만 보면 가운데 행이 바뀌어도 새 방을 놓친다. 원소가 같으면 추출하지 않는다. 이미 넣은 방의 키는 그대로다.

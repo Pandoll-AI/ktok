@@ -149,7 +149,7 @@ struct SendCommand: ParsableCommand {
                 }
                 print("Looking for chat with \(targetDescription)...")
                 print("Resolved \(targetDescription) to '\(record.displayName)'.")
-                resolution = try chatWindowResolver.resolve(query: record.displayName)
+                resolution = try chatWindowResolver.resolve(query: record.displayName, ensureAllFolderBeforeMatch: true)
                 if resolution.openedNewWindow {
                     print("No existing chat window. Opened chat (\(resolution.methodLabel)).")
                 } else {
@@ -158,7 +158,7 @@ struct SendCommand: ParsableCommand {
             } else {
                 let recipient = recipient ?? ""
                 print("Looking for chat with \(targetDescription)...")
-                resolution = try chatWindowResolver.resolve(query: recipient)
+                resolution = try chatWindowResolver.resolve(query: recipient, ensureAllFolderBeforeMatch: true)
                 if resolution.openedNewWindow {
                     print("No existing chat window. Opened chat (\(resolution.methodLabel)).")
                 } else {

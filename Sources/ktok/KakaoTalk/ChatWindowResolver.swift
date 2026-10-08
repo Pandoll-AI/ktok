@@ -80,7 +80,7 @@ struct ChatWindowResolver {
         self.deepRecoveryEnabled = deepRecoveryEnabled
     }
 
-    func resolve(query: String) throws -> ChatWindowResolution {
+    func resolve(query: String, ensureAllFolderBeforeMatch: Bool = false) throws -> ChatWindowResolution {
         let usableWindow = try requireUsableWindow()
 
         // 1) Already-open conversation window (exact title). Cheapest path.
@@ -99,7 +99,8 @@ struct ChatWindowResolver {
             query: query,
             rootWindow: searchWindow,
             fallbackWindow: usableWindow,
-            ensureAllFolderOnMiss: true
+            ensureAllFolderOnMiss: true,
+            ensureAllFolderBeforeMatch: ensureAllFolderBeforeMatch
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -113,7 +114,8 @@ struct ChatWindowResolver {
             query: query,
             rootWindow: chatroomsRoot,
             fallbackWindow: usableWindow,
-            ensureAllFolderOnMiss: true
+            ensureAllFolderOnMiss: true,
+            ensureAllFolderBeforeMatch: ensureAllFolderBeforeMatch
         ) {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
@@ -800,7 +802,8 @@ struct ChatWindowResolver {
         query: String,
         rootWindow: UIElement,
         fallbackWindow: UIElement,
-        ensureAllFolderOnMiss: Bool = false
+        ensureAllFolderOnMiss: Bool = false,
+        ensureAllFolderBeforeMatch: Bool = false
     ) -> UIElement? {
         runner.log("resolve: probing visible chat-list rows by exact title")
         let trace: (String) -> Void = { message in
@@ -812,10 +815,25 @@ struct ChatWindowResolver {
                 scoreQueryMatch(query: query, candidateText: snapshot.discovery.title) > 0
             }
         }
+        if ensureAllFolderBeforeMatch {
+            let alreadyAttempted = folderRecovery.hasAttempted
+            let clicked = folderRecovery.ensureAllFolder(
+                in: rootWindow,
+                kakao: kakao,
+                runner: runner,
+                reason: "send pre-match",
+                trace: trace
+            )
+            if !clicked && !alreadyAttempted && folderRecovery.hasAttempted {
+                runner.log("search: send visible-row match skipped because All folder was not confirmed")
+                return nil
+            }
+        }
         var visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
         var matches = exactTitleMatches(in: visibleRows)
         // Unread can show a non-empty subset. Click All only when this query is
         // absent, including zero rows. Two exact titles stay ambiguous.
+        // Send calls click before this match, so they do not use the miss path.
         if ensureAllFolderOnMiss && matches.isEmpty {
             let clicked = folderRecovery.ensureAllFolder(
                 in: rootWindow,

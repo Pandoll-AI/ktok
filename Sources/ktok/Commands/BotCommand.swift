@@ -414,7 +414,7 @@ struct BotRunCommand: ParsableCommand {
                     title: runtime.title,
                     chatID: runtime.chatID
                 )
-                let resolution = try resolver.resolve(query: runtime.title)
+                let resolution = try resolver.resolve(query: runtime.title, ensureAllFolderBeforeMatch: true)
                 runtime.window = resolution.window
             } catch {
                 emit([

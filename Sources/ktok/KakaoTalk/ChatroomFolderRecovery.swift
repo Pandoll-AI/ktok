@@ -8,6 +8,9 @@ import Foundation
 final class ChatroomFolderRecovery {
     private var attempted = false
 
+    /// True after this instance has found the strip and started an attempt.
+    var hasAttempted: Bool { attempted }
+
     /// Posts one HID click on All folder. Returns true only when the click was posted.
     /// Waits until the visible row elements change, or 0.6s if they stay the same.
     @discardableResult
