@@ -555,7 +555,7 @@ struct ChannelDaemonCommand: ParsableCommand {
     func run() throws {
         var loops = 0
         var store: ChannelStore?
-        var storeStamp: KtokFileStamp?
+        var storeStamp: DBIdentity?
         while true {
             loops += 1
             do {
@@ -566,8 +566,11 @@ struct ChannelDaemonCommand: ParsableCommand {
                 poll.traceAX = traceAX
                 try poll.poll(using: active)
             } catch {
-                store = nil
-                storeStamp = nil
+                // SEARCH_MISS and other AX failures become ExitCode.failure and keep the connection.
+                if error is DatabaseError {
+                    store = nil
+                    storeStamp = nil
+                }
                 if json {
                     KtokWorkspaceStore.printJSON(["ok": false, "error": String(describing: error), "loop": loops])
                 } else {
@@ -585,7 +588,7 @@ struct ChannelDaemonCommand: ParsableCommand {
                 // Stamp the path before open so a replace during open is seen next cycle.
                 store = nil
                 storeStamp = nil
-                let before = KtokFileStamp.capture(Self.channelDatabasePath())
+                let before = DBIdentity.capture(Self.channelDatabasePath())
                 let fresh = try ChannelStore()
                 status = try fresh.status()
                 store = fresh
@@ -600,13 +603,13 @@ struct ChannelDaemonCommand: ParsableCommand {
         }
     }
 
-    /// Reuses the open sqlite connection unless `dbPath` was replaced or removed.
-    /// The stamp is taken before `ChannelStore()` so a replace during open does not
-    /// look identical to the connection. A missing file that this open creates is
-    /// reopened once on the next cycle.
-    private func reusableStore(_ store: inout ChannelStore?, stamp: inout KtokFileStamp?) throws -> ChannelStore {
+    /// Reuses the open sqlite connection unless the db file was replaced or removed.
+    /// Identity is existence plus inode, taken before `ChannelStore()`. WAL checkpoints
+    /// change mtime and size on the same inode. A missing file that this open creates
+    /// is reopened once on the next cycle.
+    private func reusableStore(_ store: inout ChannelStore?, stamp: inout DBIdentity?) throws -> ChannelStore {
         let path = store?.dbPath ?? Self.channelDatabasePath()
-        let before = KtokFileStamp.capture(path)
+        let before = DBIdentity.capture(path)
         if let existing = store, before == stamp {
             return existing
         }
@@ -616,6 +619,17 @@ struct ChannelDaemonCommand: ParsableCommand {
         store = opened
         stamp = before
         return opened
+    }
+
+    /// Daemon db identity. Account-file caches keep the full `KtokFileStamp`.
+    private struct DBIdentity: Equatable {
+        var exists: Bool
+        var inode: UInt64
+
+        static func capture(_ path: String) -> DBIdentity {
+            let stamp = KtokFileStamp.capture(path)
+            return DBIdentity(exists: stamp.exists, inode: stamp.inode)
+        }
     }
 
     private static func channelDatabasePath() -> String {
