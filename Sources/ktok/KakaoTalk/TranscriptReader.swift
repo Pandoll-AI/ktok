@@ -172,15 +172,25 @@ struct KakaoTalkTranscriptReader {
         }
 
         // The row BFS walks the whole transcript tree (~1.7s for 57 rows on KakaoTalk 26.4).
-        // Measured on three rooms (3/57/87 rows): it found no row that the container pass
-        // missed, so it only runs when the container pass found nothing.
-        if rows.isEmpty {
+        // Measured on three rooms (3/57/87 rows): it found no row the container pass missed,
+        // so it runs only when that pass is empty or its lowest row sits more than 120pt
+        // above the input field (the latest rows were not in the container pass).
+        let containerCount = rows.count
+        let bottomGap = bottomCoverageGap(of: rows, above: inputElement, frameCache: frameCache)
+        if containerCount == 0 || (bottomGap ?? 0) > 120 {
+            let reason = containerCount == 0
+                ? "container rows empty"
+                : "bottom gap \(Int((bottomGap ?? 0).rounded()))pt"
+            runner.log("rows: bfs ran (reason=\(reason))")
             let bfsRows = transcriptRoot.findAll(
                 role: kAXRowRole,
                 limit: max(targetRowCount * 3, 240),
                 maxNodes: 3_000
             )
             rows.append(contentsOf: bfsRows)
+        } else {
+            let gapText = bottomGap.map { "\(Int($0.rounded()))pt" } ?? "unmeasured"
+            runner.log("rows: bfs skipped (container rows=\(containerCount), bottom gap=\(gapText))")
         }
 
         if rows.isEmpty {
@@ -366,6 +376,27 @@ struct KakaoTalkTranscriptReader {
 
     private func directRowChildren(from element: UIElement) -> [UIElement] {
         element.children.filter { $0.role == kAXRowRole }
+    }
+
+    /// Input minY minus the lowest collected row's maxY. AX Y grows downward, so a
+    /// large positive gap means the newest rows are still above the composer.
+    private func bottomCoverageGap(
+        of rows: [UIElement],
+        above inputElement: UIElement,
+        frameCache: FrameCache
+    ) -> CGFloat? {
+        guard let inputFrame = frameCache.frame(of: inputElement) else { return nil }
+        var lowestMaxY = -CGFloat.greatestFiniteMagnitude
+        var sawFrame = false
+        for row in rows {
+            guard let frame = frameCache.frame(of: row) else { continue }
+            sawFrame = true
+            if frame.maxY > lowestMaxY {
+                lowestMaxY = frame.maxY
+            }
+        }
+        guard sawFrame else { return nil }
+        return inputFrame.minY - lowestMaxY
     }
 
     private func analyzeRow(

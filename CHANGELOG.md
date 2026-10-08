@@ -36,6 +36,11 @@
 - `resolve(ensureAllFolderBeforeMatch:)`는 폴더 줄이 있으면 보이는 행을 고르기 전에 All folder를 한 번 누른다. `send`, `send-image`, `send-file`, bot의 방 열기, 그리고 그 명령을 부르는 MCP send 도구가 켠다. `read`와 `watch`, `channel poll`은 대상이 없을 때만 누른다.
 - 클릭이 나갔는데 행 원소가 0.6초 안에 안 바뀌면 이미 All이었다고 보고 동명 판정을 진행한다. 줄은 있는데 클릭이 나가지 않으면 그 부분집합으로 방을 고르지 않는다.
 
+### Fixed — 대화 행 BFS는 하단이 비었을 때도 돈다 (2026-10-08)
+
+- 컨테이너에서 행을 얻으면 행 BFS를 건너뛴다. 그 행들의 최대 maxY가 입력창 minY보다 120pt 넘게 위에 있으면 BFS를 돈다. 컨테이너 행이 0개여도 돈다.
+- trace는 `rows: bfs skipped (container rows=N, bottom gap=Gpt)` 또는 `rows: bfs ran (reason=...)`이다.
+
 ### Changed — All folder 클릭은 resolve() 한 번당 한 번 (2026-10-08)
 
 - `ChatWindowResolver.resolve`는 시작마다 폴더 클릭 횟수를 리셋한다. 한 호출 안에서는 여전히 한 번이다. bot·watch처럼 리졸버를 재사용하는 프로세스는 다음 호출에서 다시 누를 수 있다.
