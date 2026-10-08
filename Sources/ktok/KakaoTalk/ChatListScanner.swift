@@ -174,12 +174,18 @@ struct ChatListScanner {
         var stablePasses = 0
         var scrollValue = 0.0
         var previousRows: [UIElement] = []
+        // Titles from the last pass that extracted them. A skipped pass keeps these.
+        var rememberedEdgeTitles: [Int: String] = [:]
         var collectOneMorePass = false
         var consecutiveUnchangedScrolls = 0
 
         for pass in 0..<maxPasses {
             let rows = collectChatItems(from: container, limit: 120)
-            let unchanged = pass > 0 && sameVisibleRows(previousRows, rows)
+            let unchanged = pass > 0 && sameVisibleRows(
+                previousRows,
+                rows,
+                rememberedEdgeTitles: rememberedEdgeTitles
+            )
             previousRows = rows
 
             var newCount = 0
@@ -187,11 +193,15 @@ struct ChatListScanner {
                 stablePasses += 1
                 trace?("chats: full scan pass=\(pass + 1), visible=\(rows.count), new=0, total=\(discoveries.count), rows=unchanged")
             } else {
+                var extractedTitles: [String] = []
+                extractedTitles.reserveCapacity(rows.count)
                 let visible = rows.map { row -> ChatListDiscovery in
                     let title = extractTitle(from: row, trace: trace)
                     let preview = extractPreview(from: row, title: title, trace: trace)
+                    extractedTitles.append(title)
                     return ChatListDiscovery(title: title, lastMessage: preview, listIndex: discoveries.count)
                 }
+                rememberedEdgeTitles = edgeTitles(extractedTitles)
                 for discovery in visible {
                     let key = fullScanKey(discovery)
                     guard !seenKeys.contains(key) else { continue }
@@ -326,18 +336,36 @@ struct ChatListScanner {
         return deduplicateElements(discoveredRows)
     }
 
-    /// CFEqual of every row, plus the first, middle, and last titles.
-    /// A reused AX element can keep the same identity while the title changes.
-    private func sameVisibleRows(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+    /// CFEqual of every row, plus the first, middle, and last titles saved from
+    /// the last pass that read them. Reading the title off the previous element
+    /// again is a no-op: CFEqual already proved it is the same AX element, so
+    /// both reads return the title it has now.
+    private func sameVisibleRows(
+        _ previous: [UIElement],
+        _ rows: [UIElement],
+        rememberedEdgeTitles: [Int: String]
+    ) -> Bool {
         guard sameRowElements(previous, rows) else { return false }
-        return sameEdgeTitles(previous, rows)
+        return sameEdgeTitles(rememberedEdgeTitles, rows)
     }
 
-    private func sameEdgeTitles(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+    /// First, middle, and last titles. A pass that skips extraction does not call this.
+    private func edgeTitles(_ titles: [String]) -> [Int: String] {
+        guard !titles.isEmpty else { return [:] }
+        var kept: [Int: String] = [:]
+        var seen = Set<Int>()
+        for index in [0, titles.count / 2, titles.count - 1] where seen.insert(index).inserted {
+            kept[index] = titles[index]
+        }
+        return kept
+    }
+
+    private func sameEdgeTitles(_ remembered: [Int: String], _ rows: [UIElement]) -> Bool {
         guard !rows.isEmpty else { return true }
         var seen = Set<Int>()
         for index in [0, rows.count / 2, rows.count - 1] where seen.insert(index).inserted {
-            if extractTitle(from: previous[index], trace: nil) != extractTitle(from: rows[index], trace: nil) {
+            guard let previousTitle = remembered[index] else { return false }
+            if previousTitle != extractTitle(from: rows[index], trace: nil) {
                 return false
             }
         }
