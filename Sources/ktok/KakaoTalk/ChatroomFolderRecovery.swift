@@ -212,13 +212,14 @@ final class ChatroomFolderRecovery {
 
     /// Send may restore the same app again later. Already-front is a no-op.
     private static func restorePreviousFrontmost(_ app: NSRunningApplication?, trace: (String) -> Void) {
-        guard let app, !app.isTerminated else { return }
+        guard let app, !app.isTerminated, app.activationPolicy == .regular else { return }
         let kakaoPID = KakaoTalkApp.runningApplication?.processIdentifier
         if app.bundleIdentifier == KakaoTalkApp.bundleIdentifier || app.processIdentifier == kakaoPID {
             return
         }
-        if let front = FrontmostApp.current(),
-           front.processIdentifier == app.processIdentifier {
+        // Restore only when KakaoTalk holds focus now (we took it). Unknown focus or a
+        // third app means the user moved on; activating the saved app would steal it.
+        guard let front = FrontmostApp.current(), front.processIdentifier == kakaoPID else {
             return
         }
         trace("folder: restoring frontmost app '\(app.bundleIdentifier ?? "?")'")
