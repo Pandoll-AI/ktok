@@ -25,6 +25,12 @@
 - 칩에 AXPress가 없고 선택 상태도 AX로 읽을 수 없다. 한 명령에서 한 번이다. 폴더 줄이 없으면 횟수를 올리지 않는다. 검색 경로의 보이는 행 스캔은 클릭하지 않는다. 앞창이 아니면 클릭하지 않는다.
 - trace는 `folder: ensured All folder (reason=...)`이다. reason은 `visible-row miss`, `chats pre-scan`, `channel refresh pre-scan`이다.
 
+### Fixed — All folder 클릭은 칩 위에서만 (2026-10-08)
+
+- activate와 앞창 확인 뒤에 칩 frame을 다시 읽는다. 메인 창 `AXMinimized`가 false일 때만 클릭한다.
+- 클릭 좌표는 `AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), x, y)`로 확인하고, 그 원소의 부모를 최대 10단계 올라가 `Chatroom folder` AXList가 있을 때만 누른다. 아니면 클릭하지 않고 trace를 남긴다.
+- 클릭 전 `CGEvent(source: nil)?.location`을 저장하고, 클릭 뒤 mouseMoved로 커서를 그 자리에 되돌린다.
+
 ### Changed — 전체 채팅 스캔이 같은 행을 반복해서 읽지 않음 (2026-10-08)
 
 - `scanAll`은 패스마다 행 원소를 순서대로 `CFEqual` 비교한다. 같으면 제목·미리보기를 다시 읽지 않고 stable로 센다. 원소가 바뀌면 기존처럼 추출한다.

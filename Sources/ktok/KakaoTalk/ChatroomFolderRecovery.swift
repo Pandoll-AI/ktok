@@ -3,8 +3,8 @@ import ApplicationServices.HIServices
 import Foundation
 
 /// KakaoTalk 26.x folder chips have no AXPress and reject AXSelected.
-/// Selection is not exposed, so each command clicks "All folder" at most once
-/// when the strip exists. Builds without the strip do nothing.
+/// Selection is not exposed. A click is posted only after the chip frame is
+/// re-read on a visible frontmost window and the point hits the folder strip.
 final class ChatroomFolderRecovery {
     private var attempted = false
 
@@ -20,17 +20,12 @@ final class ChatroomFolderRecovery {
     ) -> Bool {
         guard !attempted else { return false }
         guard let list = Self.chatroomFolderList(in: window),
-              let chip = Self.allFolderText(in: list) else {
+              Self.allFolderText(in: list) != nil else {
             trace("folder: chatroom folder strip absent")
             return false
         }
 
         attempted = true
-        guard let point = Self.clickPoint(for: chip) else {
-            trace("folder: All folder chip has no frame")
-            return false
-        }
-
         kakao.activate()
         Thread.sleep(forTimeInterval: 0.08)
         let frontmost = runner.waitUntil(
@@ -49,11 +44,27 @@ final class ChatroomFolderRecovery {
             return false
         }
 
-        let scanner = ChatListScanner()
-        let baseline = scanner.visibleRowElements(in: window, limit: 80)
-        guard runner.clickScreenPoint(point, label: "all-folder chip") else {
+        guard let point = Self.clickPointAfterActivation(in: window) else {
+            trace("folder: All folder chip frame missing after activate")
             return false
         }
+        guard Self.minimizedIsFalse(window) else {
+            trace("folder: All folder click skipped because AXMinimized is not false")
+            return false
+        }
+        guard Self.pointHitsChatroomFolder(point) else {
+            trace("folder: All folder click skipped because the point is outside the Chatroom folder strip")
+            return false
+        }
+
+        let scanner = ChatListScanner()
+        let baseline = scanner.visibleRowElements(in: window, limit: 80)
+        let savedCursor = CGEvent(source: nil)?.location
+        let posted = runner.clickScreenPoint(point, label: "all-folder chip")
+        if let savedCursor {
+            _ = MouseEvents.move(to: savedCursor)
+        }
+        guard posted else { return false }
         trace("folder: ensured All folder (reason=\(reason))")
         _ = runner.waitUntil(
             label: "all-folder rows",
@@ -65,6 +76,42 @@ final class ChatroomFolderRecovery {
             return !Self.sameRowElements(baseline, now)
         }
         return true
+    }
+
+    /// Frame is read after activate. The pre-activate frame can sit on another window.
+    private static func clickPointAfterActivation(in window: UIElement) -> CGPoint? {
+        guard let list = chatroomFolderList(in: window),
+              let chip = allFolderText(in: list) else {
+            return nil
+        }
+        return clickPoint(for: chip)
+    }
+
+    /// `true` only when the attribute is present and false. A missing value is not a confirmation.
+    private static func minimizedIsFalse(_ window: UIElement) -> Bool {
+        guard let minimized: Bool = window.attributeOptional(kAXMinimizedAttribute) else {
+            return false
+        }
+        return minimized == false
+    }
+
+    /// Parent chain of the system-wide hit, at most 10 steps, must include the folder list.
+    private static func pointHitsChatroomFolder(_ point: CGPoint) -> Bool {
+        let system = UIElement(AXUIElementCreateSystemWide())
+        guard let hit = try? system.element(at: point) else { return false }
+        var node = hit.parent
+        var steps = 0
+        while let current = node, steps < 10 {
+            steps += 1
+            if current.role == kAXListRole {
+                let title = current.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if title == "Chatroom folder" {
+                    return true
+                }
+            }
+            node = current.parent
+        }
+        return false
     }
 
     private static func sameRowElements(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
