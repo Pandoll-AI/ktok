@@ -170,6 +170,10 @@ enum KtokPaths {
         LegacyMigrationGate.shared.perform(runLegacyMigrationBody)
     }
 
+    static func resetLegacyMigrationGate() {
+        LegacyMigrationGate.shared.reset()
+    }
+
     /// Returns the alias whose directories were ensured, or nil when no account is current.
     /// Caller holds `LegacyMigrationGate`'s lock. Do not call `migrateLegacyStorageIfNeeded` from here.
     private static func runLegacyMigrationBody() -> String? {
@@ -374,6 +378,15 @@ private final class LegacyMigrationGate: @unchecked Sendable {
             completed = nil
             noAlias = MigrationKey(home: home, alias: "", stamp: stampAfter)
         }
+    }
+
+    /// `LoginAccountState.save` / `clear` drop the skip key so the same alias
+    /// recreates account directories in this process.
+    func reset() {
+        lock.lock()
+        completed = nil
+        noAlias = nil
+        lock.unlock()
     }
 
     private struct MigrationKey: Equatable {

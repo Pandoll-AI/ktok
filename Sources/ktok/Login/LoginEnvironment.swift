@@ -358,6 +358,7 @@ struct LoginAccountState: Codable {
         let data = try JSONEncoder().encode(state)
         try data.write(to: url, options: [.atomic])
         invalidateCachedRead()
+        KtokPaths.resetLegacyMigrationGate()
         KtokPaths.writeAccountMetadata(credentials: credentials, profileName: profileName)
         KtokPaths.migrateLegacyStorageIfNeeded()
     }
@@ -365,6 +366,7 @@ struct LoginAccountState: Codable {
     static func clear(path: String = defaultPath) {
         try? FileManager.default.removeItem(atPath: path)
         invalidateCachedRead()
+        KtokPaths.resetLegacyMigrationGate()
     }
 }
 
