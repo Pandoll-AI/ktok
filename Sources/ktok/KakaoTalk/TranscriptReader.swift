@@ -171,7 +171,10 @@ struct KakaoTalkTranscriptReader {
             rows.append(contentsOf: directRowChildren(from: container))
         }
 
-        if rows.count < targetRowCount {
+        // The row BFS walks the whole transcript tree (~1.7s for 57 rows on KakaoTalk 26.4).
+        // Measured on three rooms (3/57/87 rows): it found no row that the container pass
+        // missed, so it only runs when the container pass found nothing.
+        if rows.isEmpty {
             let bfsRows = transcriptRoot.findAll(
                 role: kAXRowRole,
                 limit: max(targetRowCount * 3, 240),
