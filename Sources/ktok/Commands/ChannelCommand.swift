@@ -928,15 +928,15 @@ struct ChannelInstallDaemonCommand: ParsableCommand {
 }
 
 private func ensureKakaoFrontmost(kakao: KakaoTalkApp, runner: AXActionRunner, label: String) -> Bool {
-    let before = NSWorkspace.shared.frontmostApplication
+    let before = FrontmostApp.current()
     runner.log("\(label): frontmost before bundle='\(before?.bundleIdentifier ?? "")' pid=\(before?.processIdentifier ?? -1)")
     kakao.activate()
     let expectedPID = KakaoTalkApp.runningApplication?.processIdentifier
     let becameFrontmost = runner.waitUntil(label: "\(label) frontmost", timeout: 0.6, pollInterval: 0.06, evaluateAfterTimeout: true) {
-        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return false }
+        guard let frontmost = FrontmostApp.current() else { return false }
         return frontmost.bundleIdentifier == KakaoTalkApp.bundleIdentifier || frontmost.processIdentifier == expectedPID
     }
-    let after = NSWorkspace.shared.frontmostApplication
+    let after = FrontmostApp.current()
     runner.log("\(label): frontmost after bundle='\(after?.bundleIdentifier ?? "")' pid=\(after?.processIdentifier ?? -1) ok=\(becameFrontmost)")
     return becameFrontmost
 }

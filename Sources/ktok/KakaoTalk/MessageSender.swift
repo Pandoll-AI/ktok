@@ -55,7 +55,7 @@ enum MessageSender {
         runner: AXActionRunner,
         label: String = "foreground send"
     ) -> Bool {
-        let previousFrontmost = NSWorkspace.shared.frontmostApplication
+        let previousFrontmost = FrontmostApp.current()
         defer { restoreFrontmostApp(previousFrontmost, runner: runner) }
 
         kakao.activate()
@@ -84,14 +84,14 @@ enum MessageSender {
               app.bundleIdentifier != KakaoTalkApp.bundleIdentifier,
               !app.isTerminated
         else { return }
-        if let current = NSWorkspace.shared.frontmostApplication,
+        if let current = FrontmostApp.current(),
            current.bundleIdentifier != KakaoTalkApp.bundleIdentifier {
             return
         }
         runner.log("send: restoring foreground app '\(app.bundleIdentifier ?? "?")'")
         app.activate(options: [.activateIgnoringOtherApps])
         _ = runner.waitUntil(label: "restore frontmost", timeout: 0.25, pollInterval: 0.05) {
-            NSWorkspace.shared.frontmostApplication?.bundleIdentifier == app.bundleIdentifier
+            FrontmostApp.current()?.bundleIdentifier == app.bundleIdentifier
         }
     }
 }

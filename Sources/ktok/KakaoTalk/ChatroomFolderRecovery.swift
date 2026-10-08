@@ -38,7 +38,7 @@ final class ChatroomFolderRecovery {
         }
 
         attempted = true
-        let previousFrontmost = NSWorkspace.shared.frontmostApplication
+        let previousFrontmost = FrontmostApp.current()
         kakao.activate()
         Thread.sleep(forTimeInterval: 0.08)
         let frontmost = runner.waitUntil(
@@ -47,7 +47,7 @@ final class ChatroomFolderRecovery {
             pollInterval: 0.06,
             evaluateAfterTimeout: true
         ) {
-            guard let front = NSWorkspace.shared.frontmostApplication else { return false }
+            guard let front = FrontmostApp.current() else { return false }
             let expectedPID = KakaoTalkApp.runningApplication?.processIdentifier
             return front.bundleIdentifier == KakaoTalkApp.bundleIdentifier
                 || front.processIdentifier == expectedPID
@@ -107,7 +107,7 @@ final class ChatroomFolderRecovery {
         if app.bundleIdentifier == KakaoTalkApp.bundleIdentifier || app.processIdentifier == kakaoPID {
             return
         }
-        if let front = NSWorkspace.shared.frontmostApplication,
+        if let front = FrontmostApp.current(),
            front.processIdentifier == app.processIdentifier {
             return
         }

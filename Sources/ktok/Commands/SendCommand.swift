@@ -137,7 +137,7 @@ struct SendCommand: ParsableCommand {
         // Remember the user's foreground app up front: resolving/opening a chat
         // window and the foreground send both bring KakaoTalk forward, so we
         // restore focus once everything (including window close) is done.
-        let previousFrontmost = NSWorkspace.shared.frontmostApplication
+        let previousFrontmost = FrontmostApp.current()
         defer { restoreFrontmostApp(previousFrontmost, runner: runner) }
 
         do {
