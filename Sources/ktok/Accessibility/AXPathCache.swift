@@ -10,14 +10,14 @@ enum AXPathSlot: String, CaseIterable, Codable {
     case chatRowPreview
 }
 
-struct AXPathStep: Codable {
+struct AXPathStep: Codable, Equatable {
     let childIndex: Int
     let role: String?
     let identifier: String?
     let title: String?
 }
 
-struct AXElementPath: Codable {
+struct AXElementPath: Codable, Equatable {
     let steps: [AXPathStep]
 }
 
@@ -54,6 +54,10 @@ final class AXPathCacheStore: @unchecked Sendable {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var cachedDocument: AXPathCacheDocument?
+    private var rowSlotBatchDepth = 0
+    private var rowSlotPersistPending = false
+    private var rowSlotDeferredCount = 0
+    private var batchFileWrites = 0
 
     init(fileURL: URL = AXPathCacheStore.defaultURL()) {
         self.fileURL = fileURL
@@ -142,10 +146,14 @@ final class AXPathCacheStore: @unchecked Sendable {
         var document = loadDocument()
         let currentFingerprint = Self.currentAppFingerprint()
         if document.appFingerprint != currentFingerprint {
-            trace?("cache: fingerprint changed, invalidating entries")
             document = emptyDocument()
-            cachedDocument = document
-            try? persist(document)
+            commitDocument(
+                document,
+                slot: nil,
+                trace: trace,
+                successDetail: "cache: fingerprint changed, invalidating entries",
+                failurePrefix: "cache: fingerprint invalidation persist failed"
+            )
             return nil
         }
 
@@ -158,24 +166,32 @@ final class AXPathCacheStore: @unchecked Sendable {
         }
 
         if Date().timeIntervalSince(entry.updatedAt) > Self.cacheEntryTTL {
-            trace?("cache: expired slot=\(slot.rawValue), removing")
             document.entries.removeAll {
                 $0.slot == slot && $0.rootFingerprint == rootFingerprint
             }
             document.updatedAt = Date()
-            cachedDocument = document
-            try? persist(document)
+            commitDocument(
+                document,
+                slot: slot,
+                trace: trace,
+                successDetail: "cache: expired slot=\(slot.rawValue), removing",
+                failurePrefix: "cache: expired slot=\(slot.rawValue) persist failed"
+            )
             return nil
         }
 
         guard let candidate = AXPathResolver.resolve(path: entry.path, from: root), validate(candidate) else {
-            trace?("cache: stale slot=\(slot.rawValue), removing")
             document.entries.removeAll {
                 $0.slot == slot && $0.rootFingerprint == rootFingerprint
             }
             document.updatedAt = Date()
-            cachedDocument = document
-            try? persist(document)
+            commitDocument(
+                document,
+                slot: slot,
+                trace: trace,
+                successDetail: "cache: stale slot=\(slot.rawValue), removing",
+                failurePrefix: "cache: stale slot=\(slot.rawValue) persist failed"
+            )
             return nil
         }
 
@@ -191,6 +207,13 @@ final class AXPathCacheStore: @unchecked Sendable {
 
         var document = loadDocument()
         let rootFingerprint = AXPathResolver.rootFingerprint(of: root)
+        if let existing = document.entries.first(where: {
+            $0.slot == slot && $0.rootFingerprint == rootFingerprint
+        }), existing.path == path {
+            trace?("cache: unchanged slot=\(slot.rawValue)")
+            return
+        }
+
         let entry = AXPathCacheEntry(
             slot: slot,
             rootFingerprint: rootFingerprint,
@@ -205,12 +228,72 @@ final class AXPathCacheStore: @unchecked Sendable {
         document.updatedAt = Date()
         document.appFingerprint = Self.currentAppFingerprint()
 
+        commitDocument(
+            document,
+            slot: slot,
+            trace: trace,
+            successDetail: "cache: stored slot=\(slot.rawValue)",
+            failurePrefix: "cache: store failed slot=\(slot.rawValue)"
+        )
+    }
+
+    /// Row-layout slots flip between image and plain rows. Keep those edits in
+    /// memory for the scan and write the file once at `endRowSlotPersistBatch`.
+    func beginRowSlotPersistBatch() {
+        if rowSlotBatchDepth == 0 {
+            rowSlotPersistPending = false
+            rowSlotDeferredCount = 0
+            batchFileWrites = 0
+        }
+        rowSlotBatchDepth += 1
+    }
+
+    func endRowSlotPersistBatch(trace: ((String) -> Void)? = nil) {
+        guard rowSlotBatchDepth > 0 else { return }
+        rowSlotBatchDepth -= 1
+        guard rowSlotBatchDepth == 0 else { return }
+
+        var writes = batchFileWrites
+        let deferred = rowSlotDeferredCount
+        batchFileWrites = 0
+        rowSlotDeferredCount = 0
+        if rowSlotPersistPending {
+            rowSlotPersistPending = false
+            if let document = cachedDocument {
+                do {
+                    try persist(document)
+                    writes += 1
+                } catch {
+                    trace?("cache: row-slot persist flush failed (\(error))")
+                }
+            }
+        }
+        trace?("cache: persist writes=\(writes) deferred=\(deferred)")
+    }
+
+    private func commitDocument(
+        _ document: AXPathCacheDocument,
+        slot: AXPathSlot?,
+        trace: ((String) -> Void)?,
+        successDetail: String,
+        failurePrefix: String
+    ) {
         cachedDocument = document
+        if rowSlotBatchDepth > 0, slot == .chatRowTitle || slot == .chatRowPreview {
+            rowSlotPersistPending = true
+            rowSlotDeferredCount += 1
+            trace?("\(successDetail) persist=deferred")
+            return
+        }
+
         do {
             try persist(document)
-            trace?("cache: stored slot=\(slot.rawValue)")
+            if rowSlotBatchDepth > 0 {
+                batchFileWrites += 1
+            }
+            trace?("\(successDetail) persist=1")
         } catch {
-            trace?("cache: store failed slot=\(slot.rawValue) (\(error))")
+            trace?("\(failurePrefix) (\(error))")
         }
     }
 

@@ -124,6 +124,9 @@ struct ChatListSnapshotItem {
 
 struct ChatListScanner {
     func scan(in window: UIElement, limit: Int, trace: ((String) -> Void)? = nil) -> [ChatListSnapshotItem] {
+        AXPathCacheStore.shared.beginRowSlotPersistBatch()
+        defer { AXPathCacheStore.shared.endRowSlotPersistBatch(trace: trace) }
+
         guard let container = resolveChatListContainer(in: window, trace: trace) else {
             trace?("chats: chat list container unavailable")
             return []
@@ -154,6 +157,9 @@ struct ChatListScanner {
         maxPasses: Int = 80,
         trace: ((String) -> Void)? = nil
     ) -> [ChatListSnapshotItem] {
+        AXPathCacheStore.shared.beginRowSlotPersistBatch()
+        defer { AXPathCacheStore.shared.endRowSlotPersistBatch(trace: trace) }
+
         guard let container = resolveChatListContainer(in: window, trace: trace) else {
             trace?("chats: chat list container unavailable")
             return []
@@ -166,46 +172,65 @@ struct ChatListScanner {
         var seenKeys = Set<String>()
         var stablePasses = 0
         var scrollValue = 0.0
+        var previousRows: [UIElement] = []
+        var pinnedToEnd = false
 
         for pass in 0..<maxPasses {
             let rows = collectChatItems(from: container, limit: 120)
-            let visible = rows.map { row -> ChatListDiscovery in
-                let title = extractTitle(from: row, trace: trace)
-                let preview = extractPreview(from: row, title: title, trace: trace)
-                return ChatListDiscovery(title: title, lastMessage: preview, listIndex: discoveries.count)
-            }
+            let unchanged = pass > 0 && sameRowElements(previousRows, rows)
+            previousRows = rows
 
             var newCount = 0
-            for discovery in visible {
-                let key = fullScanKey(discovery)
-                guard !seenKeys.contains(key) else { continue }
-                seenKeys.insert(key)
-                discoveries.append(ChatListDiscovery(
-                    title: discovery.title,
-                    lastMessage: discovery.lastMessage,
-                    listIndex: discoveries.count
-                ))
-                newCount += 1
-            }
-
-            trace?("chats: full scan pass=\(pass + 1), visible=\(visible.count), new=\(newCount), total=\(discoveries.count)")
-            if newCount == 0 {
+            if unchanged {
                 stablePasses += 1
+                trace?("chats: full scan pass=\(pass + 1), visible=\(rows.count), new=0, total=\(discoveries.count), rows=unchanged")
             } else {
-                stablePasses = 0
+                let visible = rows.map { row -> ChatListDiscovery in
+                    let title = extractTitle(from: row, trace: trace)
+                    let preview = extractPreview(from: row, title: title, trace: trace)
+                    return ChatListDiscovery(title: title, lastMessage: preview, listIndex: discoveries.count)
+                }
+                for discovery in visible {
+                    let key = fullScanKey(discovery)
+                    guard !seenKeys.contains(key) else { continue }
+                    seenKeys.insert(key)
+                    discoveries.append(ChatListDiscovery(
+                        title: discovery.title,
+                        lastMessage: discovery.lastMessage,
+                        listIndex: discoveries.count
+                    ))
+                    newCount += 1
+                }
+                trace?("chats: full scan pass=\(pass + 1), visible=\(visible.count), new=\(newCount), total=\(discoveries.count)")
+                if newCount == 0 {
+                    stablePasses += 1
+                } else {
+                    stablePasses = 0
+                }
             }
             if stablePasses >= 3 {
                 break
             }
 
+            let beforeScroll = ScrollEvents.verticalScrollPosition(container)
             scrollValue = min(1.0, scrollValue + 0.08)
             let didSetScroll = ScrollEvents.setVerticalScrollPosition(container, value: scrollValue)
-            if !didSetScroll {
+            if didSetScroll {
+                let afterScroll = ScrollEvents.verticalScrollPosition(container)
+                if let beforeScroll, let afterScroll, abs(afterScroll - beforeScroll) < 0.001 {
+                    trace?("chats: full scan scroll unchanged value=\(String(format: "%.3f", afterScroll))")
+                    break
+                }
+                if let afterScroll, afterScroll >= 0.999 {
+                    pinnedToEnd = true
+                    trace?("chats: full scan scroll at end value=\(String(format: "%.3f", afterScroll))")
+                }
+            } else {
                 guard ScrollEvents.scrollElement(container, direction: .down, amount: 10) else {
                     break
                 }
             }
-            if scrollValue >= 1.0, newCount == 0 {
+            if (scrollValue >= 1.0 || pinnedToEnd), newCount == 0 {
                 break
             }
             Thread.sleep(forTimeInterval: 0.18)
@@ -222,7 +247,8 @@ struct ChatListScanner {
 
         var warmedSlots: [AXPathSlot] = [.chatListContainer]
         if let firstRow = collectChatItems(from: container, limit: 1).first {
-            if extractTitleElement(from: firstRow, trace: trace)?.element != nil {
+            if let title = extractTitleElement(from: firstRow) {
+                AXPathCacheStore.shared.remember(slot: .chatRowTitle, root: firstRow, element: title.element, trace: trace)
                 warmedSlots.append(.chatRowTitle)
             }
             if extractPreviewElement(from: firstRow, title: extractTitle(from: firstRow, trace: trace), trace: trace)?.element != nil {
@@ -285,43 +311,62 @@ struct ChatListScanner {
         return deduplicateElements(discoveredRows)
     }
 
+    /// Ordered AX identity. A middle row that changes still extracts; first/last
+    /// alone would treat that pass as stable and drop the room.
+    private func sameRowElements(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+        guard previous.count == rows.count else { return false }
+        for (lhs, rhs) in zip(previous, rows) {
+            if !CFEqual(lhs.axElement, rhs.axElement) {
+                return false
+            }
+        }
+        return true
+    }
+
     private func fullScanKey(_ discovery: ChatListDiscovery) -> String {
         let title = ChatTextNormalizer.normalize(discovery.title)
         let preview = discovery.lastMessage.map(ChatTextNormalizer.normalize) ?? ""
         return preview.isEmpty ? title : "\(title)|\(preview)"
     }
 
-    private func extractTitle(from row: UIElement, trace: ((String) -> Void)? = nil) -> String {
-        if let resolved = extractTitleElement(from: row, trace: trace) {
+    private func extractTitle(from row: UIElement, trace _: ((String) -> Void)? = nil) -> String {
+        if let resolved = extractTitleElement(from: row) {
             return resolved.text
         }
         return "(Unknown Chat)"
     }
 
-    private func extractTitleElement(from row: UIElement, trace: ((String) -> Void)? = nil) -> (element: UIElement, text: String)? {
-        if let cached = AXPathCacheStore.shared.resolve(
-            slot: .chatRowTitle,
-            root: row,
-            validate: { candidate in
-                titleText(from: candidate) != nil
-            },
-            trace: trace
-        ), let text = titleText(from: cached) {
-            return (cached, text)
-        }
-
+    /// Title is the row's own AXTitle, or the first static text that is not a
+    /// time or unread count. A cached child index learned on an image row points
+    /// at the time label on a plain row, so the scan does not read that slot.
+    private func extractTitleElement(from row: UIElement) -> (element: UIElement, text: String)? {
         if let text = titleText(from: row) {
-            AXPathCacheStore.shared.remember(slot: .chatRowTitle, root: row, element: row, trace: trace)
             return (row, text)
         }
+        return firstTitleStaticText(in: row)
+    }
 
-        let staticTexts = row.findAll(role: kAXStaticTextRole, limit: 12, maxNodes: 80)
-        for textNode in staticTexts {
-            guard let text = titleText(from: textNode) else { continue }
-            AXPathCacheStore.shared.remember(slot: .chatRowTitle, root: row, element: textNode, trace: trace)
-            return (textNode, text)
+    /// Same walk as `findAll(role: kAXStaticTextRole, limit: 12, maxNodes: 80)`,
+    /// stopping at the first node `titleText` accepts.
+    private func firstTitleStaticText(in row: UIElement) -> (element: UIElement, text: String)? {
+        var queue = row.children
+        var index = 0
+        var visited = 0
+        var staticCount = 0
+        while index < queue.count && staticCount < 12 && visited < 80 {
+            let current = queue[index]
+            index += 1
+            visited += 1
+            if current.role == kAXStaticTextRole {
+                staticCount += 1
+                if let text = titleText(from: current) {
+                    return (current, text)
+                }
+                if staticCount >= 12 { break }
+            }
+            if visited >= 80 { break }
+            queue.append(contentsOf: current.children)
         }
-
         return nil
     }
 

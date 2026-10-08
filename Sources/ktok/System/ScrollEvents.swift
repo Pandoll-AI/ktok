@@ -65,6 +65,24 @@ enum ScrollEvents {
         return true
     }
 
+    /// `nil` when neither the element nor its parent exposes a vertical scroll bar.
+    static func verticalScrollPosition(_ element: UIElement) -> Double? {
+        let candidates = [element, element.parent].compactMap { $0 }
+        for candidate in candidates {
+            guard let rawScrollBar: AXUIElement = candidate.attributeOptional(kAXVerticalScrollBarAttribute) else {
+                continue
+            }
+            let scrollBar = UIElement(rawScrollBar)
+            if let number = scrollBar.value as? NSNumber {
+                return number.doubleValue
+            }
+            if let number = scrollBar.value as? Double {
+                return number
+            }
+        }
+        return nil
+    }
+
     @discardableResult
     static func setVerticalScrollPosition(_ element: UIElement, value: Double) -> Bool {
         let clamped = min(max(value, 0.0), 1.0)
