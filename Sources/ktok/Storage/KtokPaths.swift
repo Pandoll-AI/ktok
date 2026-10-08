@@ -328,6 +328,7 @@ struct AccountMetadata: Codable {
 
 /// Identity of one filesystem path. A missing file is its own stamp, so a later
 /// create or replace (login, logout, config import) does not match.
+/// `capture` reads the symlink target (`stat`), not the link (`lstat`).
 struct KtokFileStamp: Equatable {
     var exists: Bool
     var inode: UInt64
@@ -337,7 +338,10 @@ struct KtokFileStamp: Equatable {
     static let missing = KtokFileStamp(exists: false, inode: 0, size: 0, mtime: 0)
 
     static func capture(_ path: String) -> KtokFileStamp {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved),
+              (attrs[.type] as? FileAttributeType) != .typeSymbolicLink
+        else {
             return .missing
         }
         let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
