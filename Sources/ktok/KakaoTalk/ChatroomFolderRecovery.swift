@@ -20,6 +20,8 @@ final class ChatroomFolderRecovery {
 
     /// Posts one HID click on All folder. Returns true only when the click was posted.
     /// Waits until the visible row elements change, or 0.6s if they stay the same.
+    /// After that wait, restores the app that was frontmost before activate
+    /// when it is not KakaoTalk and not already front.
     @discardableResult
     func ensureAllFolder(
         in window: UIElement,
@@ -36,6 +38,7 @@ final class ChatroomFolderRecovery {
         }
 
         attempted = true
+        let previousFrontmost = NSWorkspace.shared.frontmostApplication
         kakao.activate()
         Thread.sleep(forTimeInterval: 0.08)
         let frontmost = runner.waitUntil(
@@ -88,7 +91,23 @@ final class ChatroomFolderRecovery {
             let now = scanner.visibleRowElements(in: window, limit: 80)
             return !Self.sameRowElements(baseline, now)
         }
+        Self.restorePreviousFrontmost(previousFrontmost, trace: trace)
         return true
+    }
+
+    /// Send may restore the same app again later. Already-front is a no-op.
+    private static func restorePreviousFrontmost(_ app: NSRunningApplication?, trace: (String) -> Void) {
+        guard let app, !app.isTerminated else { return }
+        let kakaoPID = KakaoTalkApp.runningApplication?.processIdentifier
+        if app.bundleIdentifier == KakaoTalkApp.bundleIdentifier || app.processIdentifier == kakaoPID {
+            return
+        }
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier == app.processIdentifier {
+            return
+        }
+        trace("folder: restoring frontmost app '\(app.bundleIdentifier ?? "?")'")
+        app.activate(options: [.activateIgnoringOtherApps])
     }
 
     /// A chat window can cover the list. Failure still falls through to the frame read.
