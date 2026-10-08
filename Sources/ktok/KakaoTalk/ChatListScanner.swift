@@ -173,11 +173,12 @@ struct ChatListScanner {
         var stablePasses = 0
         var scrollValue = 0.0
         var previousRows: [UIElement] = []
-        var pinnedToEnd = false
+        var collectOneMorePass = false
+        var consecutiveUnchangedScrolls = 0
 
         for pass in 0..<maxPasses {
             let rows = collectChatItems(from: container, limit: 120)
-            let unchanged = pass > 0 && sameRowElements(previousRows, rows)
+            let unchanged = pass > 0 && sameVisibleRows(previousRows, rows)
             previousRows = rows
 
             var newCount = 0
@@ -208,6 +209,9 @@ struct ChatListScanner {
                     stablePasses = 0
                 }
             }
+            if collectOneMorePass {
+                break
+            }
             if stablePasses >= 3 {
                 break
             }
@@ -216,24 +220,28 @@ struct ChatListScanner {
             scrollValue = min(1.0, scrollValue + 0.08)
             let didSetScroll = ScrollEvents.setVerticalScrollPosition(container, value: scrollValue)
             if didSetScroll {
+                Thread.sleep(forTimeInterval: 0.18)
                 let afterScroll = ScrollEvents.verticalScrollPosition(container)
                 if let beforeScroll, let afterScroll, abs(afterScroll - beforeScroll) < 0.001 {
-                    trace?("chats: full scan scroll unchanged value=\(String(format: "%.3f", afterScroll))")
-                    break
+                    consecutiveUnchangedScrolls += 1
+                    trace?("chats: full scan scroll unchanged value=\(String(format: "%.3f", afterScroll)) count=\(consecutiveUnchangedScrolls)")
+                } else {
+                    consecutiveUnchangedScrolls = 0
                 }
                 if let afterScroll, afterScroll >= 0.999 {
-                    pinnedToEnd = true
+                    collectOneMorePass = true
                     trace?("chats: full scan scroll at end value=\(String(format: "%.3f", afterScroll))")
+                    continue
+                }
+                if consecutiveUnchangedScrolls >= 2 {
+                    break
                 }
             } else {
                 guard ScrollEvents.scrollElement(container, direction: .down, amount: 10) else {
                     break
                 }
+                Thread.sleep(forTimeInterval: 0.18)
             }
-            if (scrollValue >= 1.0 || pinnedToEnd), newCount == 0 {
-                break
-            }
-            Thread.sleep(forTimeInterval: 0.18)
         }
 
         trace?("chats: full scan resolved rows=\(discoveries.count)")
@@ -317,6 +325,24 @@ struct ChatListScanner {
 
         let discoveredRows = container.findAll(role: kAXRowRole, limit: limit, maxNodes: max(80, limit * 8))
         return deduplicateElements(discoveredRows)
+    }
+
+    /// CFEqual of every row, plus the first, middle, and last titles.
+    /// A reused AX element can keep the same identity while the title changes.
+    private func sameVisibleRows(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+        guard sameRowElements(previous, rows) else { return false }
+        return sameEdgeTitles(previous, rows)
+    }
+
+    private func sameEdgeTitles(_ previous: [UIElement], _ rows: [UIElement]) -> Bool {
+        guard !rows.isEmpty else { return true }
+        var seen = Set<Int>()
+        for index in [0, rows.count / 2, rows.count - 1] where seen.insert(index).inserted {
+            if extractTitle(from: previous[index], trace: nil) != extractTitle(from: rows[index], trace: nil) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Ordered AX identity. A middle row that changes still extracts; first/last
