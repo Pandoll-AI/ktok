@@ -11,6 +11,11 @@ final class ChatroomFolderRecovery {
     /// True after this instance has found the strip and started an attempt.
     var hasAttempted: Bool { attempted }
 
+    /// `resolve()` calls this at entry so the next call can click again.
+    func resetAttempt() {
+        attempted = false
+    }
+
     /// Posts one HID click on All folder. Returns true only when the click was posted.
     /// Waits until the visible row elements change, or 0.6s if they stay the same.
     @discardableResult

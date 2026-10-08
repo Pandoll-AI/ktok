@@ -22,7 +22,7 @@
 
 - Unread에 안 읽은 방이 있으면 그 행만 보인다. 보이는 행에 대상 제목이 없으면(0행 포함) `Chatroom folder`의 `All folder`를 한 번 누르고, 행 원소가 바뀌거나 0.6초가 지나면 보이는 행을 한 번 더 찾는다. 그 다음에 검색으로 간다. 같은 제목이 둘 이상이면 누르지 않는다.
 - `chats`의 전체·limit 스캔과 `channel refresh-chats`는 폴더 줄이 있으면 스캔 전에 같은 클릭을 한 번 한다. 이미 All이면 목록이 그대로라 대기는 0.6초에서 끝난다. 0행일 때만 다시 스캔하던 분기는 없다.
-- 칩에 AXPress가 없고 선택 상태도 AX로 읽을 수 없다. 한 명령에서 한 번이다. 폴더 줄이 없으면 횟수를 올리지 않는다. 검색 경로의 보이는 행 스캔은 클릭하지 않는다. 앞창이 아니면 클릭하지 않는다.
+- 칩에 AXPress가 없고 선택 상태도 AX로 읽을 수 없다. `resolve()` 한 번당 한 번이다. 폴더 줄이 없으면 횟수를 올리지 않는다. 검색 경로의 보이는 행 스캔은 클릭하지 않는다. 앞창이 아니면 클릭하지 않는다.
 - trace는 `folder: ensured All folder (reason=...)`이다. reason은 `visible-row miss`, `chats pre-scan`, `channel refresh pre-scan`이다.
 
 ### Fixed — All folder 클릭은 칩 위에서만 (2026-10-08)
@@ -35,6 +35,10 @@
 
 - `resolve(ensureAllFolderBeforeMatch:)`는 폴더 줄이 있으면 보이는 행을 고르기 전에 All folder를 한 번 누른다. `send`, `send-image`, `send-file`, bot의 방 열기, 그리고 그 명령을 부르는 MCP send 도구가 켠다. `read`와 `watch`, `channel poll`은 대상이 없을 때만 누른다.
 - 클릭이 나갔는데 행 원소가 0.6초 안에 안 바뀌면 이미 All이었다고 보고 동명 판정을 진행한다. 줄은 있는데 클릭이 나가지 않으면 그 부분집합으로 방을 고르지 않는다.
+
+### Changed — All folder 클릭은 resolve() 한 번당 한 번 (2026-10-08)
+
+- `ChatWindowResolver.resolve`는 시작마다 폴더 클릭 횟수를 리셋한다. 한 호출 안에서는 여전히 한 번이다. bot·watch처럼 리졸버를 재사용하는 프로세스는 다음 호출에서 다시 누를 수 있다.
 
 ### Changed — 전체 채팅 스캔이 같은 행을 반복해서 읽지 않음 (2026-10-08)
 

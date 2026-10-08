@@ -156,7 +156,9 @@ Unread는 비어 있지 않을 수 있다. 안 읽은 방이 있으면 그 행�
 
 폴더 줄이 없으면 시도 횟수를 올리지 않는다. 친구 탭이 한 번의 기회를 소모하지 않게 하기 위해서다. 검색 필드가 없을 때의 보이는 행 스캔은 이 헬퍼를 호출하지 않는다.
 
-클릭 전 `activate()`와 0.08초 대기는 `activateChatroomsTab`과 같다. 이어서 0.6초 안에 앞창이 아니면 클릭하지 않는다. 그때는 시도 횟수를 올린다. 한 명령에서 두 번 누르지 않기 위해서다.
+클릭 전 `activate()`와 0.08초 대기는 `activateChatroomsTab`과 같다. 이어서 0.6초 안에 앞창이 아니면 클릭하지 않는다. 그때는 그 `resolve()`의 한 번을 쓴다. 같은 `resolve()` 안의 두 번째 보이는 행 탐색은 다시 누르지 않는다.
+
+`resolve()`는 시작마다 시도 횟수를 리셋한다. bot·watch처럼 리졸버를 오래 들고 있는 프로세스도 다음 `resolve()`의 miss에서 다시 All을 누를 수 있다. `chats`와 `channel refresh-chats`는 헬퍼를 한 번만 부르므로 명령당 한 번이다.
 
 앞창 확인 뒤에 칩 frame을 다시 읽는다. 메인 창 `AXMinimized`가 false이고, 그 좌표의 시스템 히트 원소 부모 체인(최대 10단계)에 `Chatroom folder` AXList가 있을 때만 누른다. 하나라도 아니면 클릭하지 않고 trace를 남긴다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다.
 

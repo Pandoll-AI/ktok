@@ -81,6 +81,7 @@ struct ChatWindowResolver {
     }
 
     func resolve(query: String, ensureAllFolderBeforeMatch: Bool = false) throws -> ChatWindowResolution {
+        folderRecovery.resetAttempt()
         let usableWindow = try requireUsableWindow()
 
         // 1) Already-open conversation window (exact title). Cheapest path.
