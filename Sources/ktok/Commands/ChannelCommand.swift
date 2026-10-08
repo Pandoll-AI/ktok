@@ -461,6 +461,10 @@ struct ChannelPollOnceCommand: ParsableCommand {
     var json: Bool = false
 
     func run() throws {
+        guard AccessibilityPermission.ensureGranted() else {
+            AccessibilityPermission.printInstructions()
+            throw ExitCode.failure
+        }
         try poll(using: try ChannelStore())
     }
 
