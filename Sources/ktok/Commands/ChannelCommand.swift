@@ -551,22 +551,19 @@ struct ChannelDaemonCommand: ParsableCommand {
     func run() throws {
         var loops = 0
         var store: ChannelStore?
+        var storeStamp: KtokFileStamp?
         while true {
             loops += 1
             do {
-                let active: ChannelStore
-                if let existing = store {
-                    active = existing
-                } else {
-                    active = try ChannelStore()
-                    store = active
-                }
+                let active = try reusableStore(&store, stamp: &storeStamp)
                 var poll = ChannelPollOnceCommand()
                 poll.allMonitored = true
                 poll.json = json
                 poll.traceAX = traceAX
                 try poll.poll(using: active)
             } catch {
+                store = nil
+                storeStamp = nil
                 if json {
                     KtokWorkspaceStore.printJSON(["ok": false, "error": String(describing: error), "loop": loops])
                 } else {
@@ -575,13 +572,19 @@ struct ChannelDaemonCommand: ParsableCommand {
             }
 
             if let maxLoops, loops >= maxLoops { break }
-            let statusStore: ChannelStore
-            if let existing = store {
-                statusStore = existing
-            } else {
-                statusStore = try ChannelStore()
+            let status: ChannelStatus
+            do {
+                let statusStore = try reusableStore(&store, stamp: &storeStamp)
+                status = try statusStore.status()
+            } catch {
+                // Dead connection (replaced sqlite, IOERR, READONLY_DBMOVED): drop it and open once more.
+                store = nil
+                storeStamp = nil
+                let fresh = try ChannelStore()
+                status = try fresh.status()
+                store = fresh
+                storeStamp = KtokFileStamp.capture(fresh.dbPath)
             }
-            let status = try statusStore.status()
             if json {
                 KtokWorkspaceStore.printJSON(["event": "sleep", "seconds": status.nextIntervalSeconds])
             } else {
@@ -589,6 +592,19 @@ struct ChannelDaemonCommand: ParsableCommand {
             }
             Thread.sleep(forTimeInterval: TimeInterval(status.nextIntervalSeconds))
         }
+    }
+
+    /// Reuses the open sqlite connection unless `dbPath` was replaced or removed.
+    private func reusableStore(_ store: inout ChannelStore?, stamp: inout KtokFileStamp?) throws -> ChannelStore {
+        if let existing = store, KtokFileStamp.capture(existing.dbPath) == stamp {
+            return existing
+        }
+        store = nil
+        stamp = nil
+        let opened = try ChannelStore()
+        store = opened
+        stamp = KtokFileStamp.capture(opened.dbPath)
+        return opened
     }
 }
 
