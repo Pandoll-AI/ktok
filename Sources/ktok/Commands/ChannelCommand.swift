@@ -582,12 +582,14 @@ struct ChannelDaemonCommand: ParsableCommand {
                 status = try statusStore.status()
             } catch {
                 // Dead connection (replaced sqlite, IOERR, READONLY_DBMOVED): drop it and open once more.
+                // Stamp the path before open so a replace during open is seen next cycle.
                 store = nil
                 storeStamp = nil
+                let before = KtokFileStamp.capture(Self.channelDatabasePath())
                 let fresh = try ChannelStore()
                 status = try fresh.status()
                 store = fresh
-                storeStamp = KtokFileStamp.capture(fresh.dbPath)
+                storeStamp = before
             }
             if json {
                 KtokWorkspaceStore.printJSON(["event": "sleep", "seconds": status.nextIntervalSeconds])
@@ -599,16 +601,28 @@ struct ChannelDaemonCommand: ParsableCommand {
     }
 
     /// Reuses the open sqlite connection unless `dbPath` was replaced or removed.
+    /// The stamp is taken before `ChannelStore()` so a replace during open does not
+    /// look identical to the connection. A missing file that this open creates is
+    /// reopened once on the next cycle.
     private func reusableStore(_ store: inout ChannelStore?, stamp: inout KtokFileStamp?) throws -> ChannelStore {
-        if let existing = store, KtokFileStamp.capture(existing.dbPath) == stamp {
+        let path = store?.dbPath ?? Self.channelDatabasePath()
+        let before = KtokFileStamp.capture(path)
+        if let existing = store, before == stamp {
             return existing
         }
         store = nil
         stamp = nil
         let opened = try ChannelStore()
         store = opened
-        stamp = KtokFileStamp.capture(opened.dbPath)
+        stamp = before
         return opened
+    }
+
+    private static func channelDatabasePath() -> String {
+        KtokPaths.home
+            .appendingPathComponent("channel", isDirectory: true)
+            .appendingPathComponent("channel.sqlite")
+            .path
     }
 }
 
