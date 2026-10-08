@@ -74,7 +74,7 @@
 
 - `KtokPaths.migrateLegacyStorageIfNeeded` (`Storage/KtokPaths.swift:173`, 호출 `108`·`116`·`124`, `LoginAccountState.read:321`, `ChatIdentityRegistry.defaultURL:317`). `ensureWorkspace` 와 `copyIfNeeded` 가 호출마다 `fileExists` 를 반복한다. 같은 홈·alias·계정 파일 stamp(mtime, size, inode, 파일 없음 포함)에서는 본문을 건너뛴다. stamp가 바뀌거나 alias가 생기면 본문을 다시 실행한다. `save` / `clear` 는 가드를 리셋한다.
 - `LoginAccountState.readWithoutMigration` (`Login/LoginEnvironment.swift:325`). `ChatIdentityRecord.init` 이 레코드마다 `ChatAccountContext.active()` → `read()` 를 호출해 `current-account.json` 을 다시 디코드한다. `ktok login` 상태 출력도 같은 파일을 세 번 읽는다 (`Commands/LoginCommand.swift:196-203`). 경로와 파일 stamp가 같으면 디코드를 생략한다. 읽기마다 stat 1회. 다른 프로세스의 login, logout, config import는 다음 읽기에서 보인다. `save` / `clear` / 마이그레이션 시작에서도 캐시를 비운다.
-- `ChannelDaemonCommand` 가 사이클마다 `ChannelStore` 를 두 번 연다 (`poll.run` 내부와 `status()`). 파일 stamp가 같은 동안 연결 하나를 재사용한다. db inode·mtime이 바뀌거나 poll이 실패하면 버리고 다시 연다. `status()` 실패는 한 번 재오픈하고, 그것도 실패하면 종료한다. `poll-once` 는 AX 권한 확인 뒤에 sqlite를 연다.
+- `ChannelDaemonCommand` 가 사이클마다 `ChannelStore` 를 두 번 연다 (`poll.run` 내부와 `status()`). open 직전에 찍은 존재 여부와 inode가 같은 동안 연결 하나를 재사용한다. WAL 체크포인트의 mtime·size 변화로는 다시 열지 않는다. poll은 sqlite `DatabaseError`일 때만 버리고, AX 실패는 연결을 유지한다. `status()` 실패는 한 번 재오픈하고, 그것도 실패하면 종료한다. AX 권한이 없으면 sqlite를 열지 않고 안내 후 sleep한다. `poll-once` 는 AX 권한 확인 뒤에 sqlite를 연다. `KtokFileStamp.capture`는 symlink 대상을 읽고, 계정 캐시는 대상의 mtime·size·inode를 비교한다.
 - `MessageContextResolver.resolveMessageInputField` (`KakaoTalk/MessageContextResolver.swift:74-82`). 포커스 창과 채팅 창이 같은 AX 원소여도 `collectMessageInputCandidates` 를 두 번 호출한다. 같은 원소이고 포커스 창 탐색이 실제로 돌았을 때만 두 번째 트리를 생략한다. title/frame 읽기가 실패하면 대상 창을 그대로 탐색한다.
 - `ChatListScanner.resolveChatListContainer` (`KakaoTalk/ChatListScanner.swift:197-200`). 캐시 미스마다 table / outline / list 를 `maxNodes: 220` 으로 세 번 BFS 한다. 기존 `UIElement.findAll(roles:roleLimits:maxNodes:)` 한 번으로 역할별 첫 원소를 고르고, 우선순위(table → outline → list)는 그대로 둔다.
 - 미사용 심볼. 저장소 전체(swift·sh·md 본문)에서 정의 외 참조가 없다. CHANGELOG 의 과거 문장은 이력으로 남긴다.
@@ -128,7 +128,7 @@
 
 - `migrateLegacyStorageIfNeeded`의 `ensureWorkspace`와 `fileExists`는 같은 홈·alias·계정 파일 stamp에서 프로세스당 1회다. 파일이 생기거나 stamp가 바뀌면 본문을 다시 실행한다. `save` / `clear`는 가드를 리셋한다.
 - `current-account.json` 디코드는 stamp가 같은 동안 1회다. 읽기마다 stat 1회. 외부 login, logout, import는 다음 읽기에서 반영된다.
-- daemon의 `ChannelStore` open과 `migrate()` SQL은 db stamp가 같은 동안 프로세스당 1회다. 파일이 바뀌거나 poll/`status()`가 실패하면 다시 연다. `poll-once`는 호출마다 1회이고, AX 권한이 없으면 sqlite를 열지 않는다.
+- daemon의 `ChannelStore` open과 `migrate()` SQL은 open 직전 존재 여부·inode가 같은 동안 프로세스당 1회다. poll의 sqlite `DatabaseError`나 `status()` 실패면 다시 연다. AX 실패는 연결을 유지한다. AX 권한이 없으면 sqlite를 열지 않고 sleep한다. `poll-once`는 호출마다 1회이고, AX 권한이 없으면 sqlite를 열지 않는다.
 - 채팅 목록 컨테이너 캐시 미스의 role BFS는 3회에서 1회다.
 - `read` 입력 후보 탐색은 포커스 창과 대상 창이 `CFEqual`이고 포커스 창 탐색이 돌았을 때 2회에서 1회다. title/frame 비교가 실패하면 대상 창을 탐색해 후보가 비지 않는다.
 
