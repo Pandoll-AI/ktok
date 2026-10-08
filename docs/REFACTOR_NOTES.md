@@ -135,3 +135,7 @@
 실측은 카카오톡이 떠 있는 맥에서 `time ktok channel daemon --json --max-loops 1`, `time ktok chats --json`, `time ktok read --json`을 리팩토 전후 바이너리로 비교하면 된다. 이 세션에서는 AX를 조작하지 않아 재지 않았다.
 
 보류는 2절과 같다. 오래 떠 있는 `channel daemon`, `bot run`, `mcp-server`도 계정 파일 stamp가 바뀌면 다음 읽기에서 새 alias를 본다. 재시작은 필요 없다. `KTOK_HOME`이 바뀌면 마이그레이션 본문을 다시 실행한다.
+
+## 5. 영문 시각 라벨 (2026-10-08)
+
+`ChatTextNormalizer.isTimeLikeValue`는 `10:00`, `N일`, `어제`에 더해 영문 UI 채팅 목록의 시각 라벨을 시각으로 본다. 실제 방 이름이 이 패턴과 정확히 일치하는 경우는 드물다고 가정한다. 그 이름의 방은 제목으로 잡히지 않는다.

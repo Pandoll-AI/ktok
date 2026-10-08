@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Fixed — 영문 채팅 목록 시각을 방 제목으로 읽지 않음 (2026-10-08)
+
+- `ChatTextNormalizer.isTimeLikeValue`가 영문 월·일(`Jun 10`, `Jun 10, 2025`), `h:mm AM/PM`, `오전/오후 h:mm`, `Yesterday`/`Today`/`오늘`, 요일명(영문 전체·3글자, 한글 `월요일` 등), `yyyy. m. d.`, `m/d/yy`, `yyyy-mm-dd`를 시각으로 본다. 정규식은 static let으로 한 번만 컴파일한다.
+- `N일`은 숫자+`일`과 `M월 D일` 같은 날짜 라벨만 해당한다. `차명일`처럼 글자로 끝나는 이름은 시각이 아니다.
+- 방 이름이 이 패턴과 정확히 일치하는 경우는 드물다고 본다(`docs/REFACTOR_NOTES.md`).
+
 ### Changed — 리팩토(속도·불필요 로직 제거) (2026-10-08)
 
 - 레거시 저장소 마이그레이션은 같은 홈·같은 alias·같은 계정 파일 stamp(mtime, size, inode)에서 한 번만 실행한다. 파일이 생기거나 stamp가 바뀌면 본문을 다시 돌린다. `save`와 `clear`는 이 가드를 리셋해 같은 alias의 디렉터리 생성을 다시 탄다.

@@ -24,8 +24,52 @@ enum ChatTextNormalizer {
         return String(scalars)
     }
 
+    /// English month + day, optional year. Compiled once.
+    private static let englishMonthDay = compileTimePattern(
+        #"^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?$"#
+    )
+    /// "h:mm AM/PM", optional space.
+    private static let clockWithMeridiem = compileTimePattern(
+        #"^\d{1,2}:\d{2}\s*(?:am|pm)$"#
+    )
+    /// "오전/오후 h:mm".
+    private static let koreanMeridiemClock = compileTimePattern(
+        #"^(?:오전|오후)\s*\d{1,2}:\d{2}$"#
+    )
+    /// Yesterday/Today and the Korean labels already used on the chat list.
+    private static let relativeDay = compileTimePattern(
+        #"^(?:yesterday|today|오늘|어제|그저께)$"#
+    )
+    /// Full weekday names plus the English three-letter forms. Longer names are listed first.
+    private static let weekdayName = compileTimePattern(
+        #"^(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|wed|thu|fri|sat|일요일|월요일|화요일|수요일|목요일|금요일|토요일)$"#
+    )
+    /// "yyyy. m. d.", "m/d/yy", "yyyy-mm-dd".
+    private static let numericDate = compileTimePattern(
+        #"^(?:\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{1,2}-\d{1,2})$"#
+    )
+    /// "N일", "M월 D일", "yyyy년 M월 D일", "N일 전". Not every string that ends in 일.
+    private static let koreanDayLabel = compileTimePattern(
+        #"^(?:\d{1,2}일|\d{1,2}월\s*\d{1,2}일|\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{1,2}일\s*전)$"#
+    )
+
+    private static func compileTimePattern(_ pattern: String) -> NSRegularExpression {
+        do {
+            return try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        } catch {
+            preconditionFailure("ChatTextNormalizer pattern failed: \(error)")
+        }
+    }
+
+    private static func wholeMatch(_ expression: NSRegularExpression, _ text: String) -> Bool {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.firstMatch(in: text, range: range) != nil
+    }
+
     static func isTimeLikeValue(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
         let parts = trimmed.split(separator: ":")
         if parts.count == 2,
            parts[0].count <= 2, parts[1].count == 2,
@@ -34,7 +78,14 @@ enum ChatTextNormalizer {
             return true
         }
 
-        if trimmed.hasSuffix("일") || trimmed == "어제" || trimmed == "그저께" {
+        if wholeMatch(englishMonthDay, trimmed)
+            || wholeMatch(clockWithMeridiem, trimmed)
+            || wholeMatch(koreanMeridiemClock, trimmed)
+            || wholeMatch(relativeDay, trimmed)
+            || wholeMatch(weekdayName, trimmed)
+            || wholeMatch(numericDate, trimmed)
+            || wholeMatch(koreanDayLabel, trimmed)
+        {
             return true
         }
 
