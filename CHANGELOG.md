@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Fixed — All folder hit-test는 그 칩만 통과한다 (2026-10-08)
+
+- 클릭 좌표의 히트 원소 자신, 또는 4단계 이내 조상이 클릭 대상과 `CFEqual`일 때만 누른다. 클릭 대상은 frame이 있는 부모 `AXGroup`이고, 없으면 `AXStaticText` `All folder`다.
+- `Chatroom folder` 목록이 조상인지만 보면 Unread 칩과 줄의 여백도 통과한다. 그 좌표는 누르지 않는다.
+
 ### Fixed — All folder 클릭 전에 채팅 목록 창을 올린다 (2026-10-08)
 
 - 앞창이고 `AXMinimized`가 false일 때만 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창은 올리지 않는다. Raise가 없거나 실패해도 클릭 판단은 계속한다.

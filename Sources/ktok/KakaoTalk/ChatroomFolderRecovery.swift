@@ -4,7 +4,7 @@ import Foundation
 
 /// KakaoTalk 26.x folder chips have no AXPress and reject AXSelected.
 /// Selection is not exposed. A click is posted only after AXRaise on the chat
-/// list window, the chip frame is re-read, and the point hits the folder strip.
+/// list window, the chip frame is re-read, and the hit element is that chip.
 /// A failed raise still continues. A skipped click returns false and leaves
 /// the caller's next path unchanged.
 final class ChatroomFolderRecovery {
@@ -61,19 +61,19 @@ final class ChatroomFolderRecovery {
         }
         Self.raiseMainWindow(window, trace: trace)
 
-        guard let point = Self.clickPointAfterActivation(in: window) else {
+        guard let target = Self.clickTargetAfterActivation(in: window) else {
             trace("folder: All folder chip frame missing after raise")
             return false
         }
-        guard Self.pointHitsChatroomFolder(point) else {
-            trace("folder: All folder click skipped because the point is outside the Chatroom folder strip")
+        guard Self.pointHitsAllChip(target.point, chip: target.chip) else {
+            trace("folder: All folder click skipped because the point is not the All folder chip")
             return false
         }
 
         let scanner = ChatListScanner()
         let baseline = scanner.visibleRowElements(in: window, limit: 80)
         let savedCursor = CGEvent(source: nil)?.location
-        let posted = runner.clickScreenPoint(point, label: "all-folder chip")
+        let posted = runner.clickScreenPoint(target.point, label: "all-folder chip")
         if let savedCursor {
             _ = MouseEvents.move(to: savedCursor)
         }
@@ -106,13 +106,18 @@ final class ChatroomFolderRecovery {
         }
     }
 
+    private struct AllFolderClickTarget {
+        let chip: UIElement
+        let point: CGPoint
+    }
+
     /// Frame is read after AXRaise. The pre-raise frame can belong to a covered chip.
-    private static func clickPointAfterActivation(in window: UIElement) -> CGPoint? {
+    private static func clickTargetAfterActivation(in window: UIElement) -> AllFolderClickTarget? {
         guard let list = chatroomFolderList(in: window),
-              let chip = allFolderText(in: list) else {
+              let text = allFolderText(in: list) else {
             return nil
         }
-        return clickPoint(for: chip)
+        return clickTarget(for: text)
     }
 
     /// `true` only when the attribute is present and false. A missing value is not a confirmation.
@@ -123,19 +128,21 @@ final class ChatroomFolderRecovery {
         return minimized == false
     }
 
-    /// Parent chain of the system-wide hit, at most 10 steps, must include the folder list.
-    private static func pointHitsChatroomFolder(_ point: CGPoint) -> Bool {
+    /// The hit element itself, or an ancestor within 4 steps, must be the chip
+    /// we are about to click. A sibling Unread chip shares the folder list and
+    /// must not pass.
+    private static func pointHitsAllChip(_ point: CGPoint, chip: UIElement) -> Bool {
         let system = UIElement(AXUIElementCreateSystemWide())
         guard let hit = try? system.element(at: point) else { return false }
+        if CFEqual(hit.axElement, chip.axElement) {
+            return true
+        }
         var node = hit.parent
         var steps = 0
-        while let current = node, steps < 10 {
+        while let current = node, steps < 4 {
             steps += 1
-            if current.role == kAXListRole {
-                let title = current.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if title == "Chatroom folder" {
-                    return true
-                }
+            if CFEqual(current.axElement, chip.axElement) {
+                return true
             }
             node = current.parent
         }
@@ -201,17 +208,19 @@ final class ChatroomFolderRecovery {
         return nil
     }
 
-    private static func clickPoint(for text: UIElement) -> CGPoint? {
+    /// The click target is the parent AXGroup when that group has a frame.
+    /// Otherwise it is the AXStaticText "All folder".
+    private static func clickTarget(for text: UIElement) -> AllFolderClickTarget? {
         if let parent = text.parent,
            parent.role == kAXGroupRole,
            let frame = parent.frame,
            frame.width > 0,
            frame.height > 0 {
-            return CGPoint(x: frame.midX, y: frame.midY)
+            return AllFolderClickTarget(chip: parent, point: CGPoint(x: frame.midX, y: frame.midY))
         }
         guard let frame = text.frame, frame.width > 0, frame.height > 0 else {
             return nil
         }
-        return CGPoint(x: frame.midX, y: frame.midY)
+        return AllFolderClickTarget(chip: text, point: CGPoint(x: frame.midX, y: frame.midY))
     }
 }

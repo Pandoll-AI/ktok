@@ -160,7 +160,7 @@ Unread는 비어 있지 않을 수 있다. 안 읽은 방이 있으면 그 행�
 
 `resolve()`는 시작마다 시도 횟수를 리셋한다. bot·watch처럼 리졸버를 오래 들고 있는 프로세스도 다음 `resolve()`의 miss에서 다시 All을 누를 수 있다. `chats`와 `channel refresh-chats`는 헬퍼를 한 번만 부르므로 명령당 한 번이다.
 
-앞창 확인 뒤에 메인 창 `AXMinimized`가 false인지 본다. false일 때만 그 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창을 클릭하려고 꺼내지 않기 위해서다. Raise 액션이 없거나 실패해도 클릭 판단은 계속한다. 그 다음 칩 frame을 다시 읽는다. 채팅창이 칩 위에 있으면 올린 뒤에야 좌표가 칩을 가리킨다. 그 좌표의 시스템 히트 원소 부모 체인(최대 10단계)에 `Chatroom folder` AXList가 있을 때만 누른다. 하나라도 아니면 클릭하지 않고 trace를 남긴다. 클릭이 나가지 않으면 `ensureAllFolder`는 false이고, 호출부의 다음 경로는 이 함수가 바꾸지 않는다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다.
+앞창 확인 뒤에 메인 창 `AXMinimized`가 false인지 본다. false일 때만 그 채팅 목록 창에 `AXRaise`를 한다. 최소화된 창을 클릭하려고 꺼내지 않기 위해서다. Raise 액션이 없거나 실패해도 클릭 판단은 계속한다. 그 다음 칩 frame을 다시 읽는다. 채팅창이 칩 위에 있으면 올린 뒤에야 좌표가 칩을 가리킨다. 클릭 대상은 frame이 있는 부모 `AXGroup`이고, 없으면 `All folder` 정적 텍스트다. 시스템 히트 원소 자신이 그 대상이거나, 조상을 최대 4단계 올라갔을 때 그 대상과 `CFEqual`이면 누른다. `Chatroom folder` 목록이 조상인 것만으로는 통과하지 않는다. Unread 칩과 줄의 여백은 누르지 않는다. 아니면 클릭하지 않고 trace를 남긴다. 클릭이 나가지 않으면 `ensureAllFolder`는 false이고, 호출부의 다음 경로는 이 함수가 바꾸지 않는다. 클릭 전 커서 위치는 `CGEvent(source: nil)?.location`이고, 클릭 뒤 mouseMoved로 되돌린다.
 
 `send`, `send-image`, `send-file`, bot이 방을 열 때, 그리고 그 명령을 실행하는 MCP send는 `ensureAllFolderBeforeMatch`로 보이는 행 판정 전에 All을 한 번 누른다. read 계열은 대상이 없을 때만 누른다. 줄이 있는데 클릭이 나가지 않으면 그때 보이는 행으로 수취인을 고르지 않는다.
 
