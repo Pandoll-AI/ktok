@@ -121,6 +121,13 @@ struct ChatWindowResolver {
             return ChatWindowResolution(window: rowWindow, method: .openedViaVisibleRow)
         }
 
+        // Send must not search an unconfirmed folder subset. A missing strip
+        // never sets hasAttempted, so Friends still falls through to search.
+        if ensureAllFolderBeforeMatch, folderRecovery.hasAttempted, !folderRecovery.didPostClick {
+            runner.log("search: send search skipped because All folder was not confirmed")
+            throw KakaoTalkError.elementNotFound("[ALL_FOLDER_UNCONFIRMED] All folder chip was not clicked, so the chat list was not confirmed")
+        }
+
         // 3) Fallback: the room is not open and not visible in the list (needs
         // scrolling/search) — use the heavier search-field flow.
         let chatWindow = try openChatViaSearch(query: query, in: chatroomsRoot, fallbackWindow: usableWindow)
@@ -817,17 +824,21 @@ struct ChatWindowResolver {
             }
         }
         if ensureAllFolderBeforeMatch {
-            let alreadyAttempted = folderRecovery.hasAttempted
-            let clicked = folderRecovery.ensureAllFolder(
-                in: rootWindow,
-                kakao: kakao,
-                runner: runner,
-                reason: "send pre-match",
-                trace: trace
-            )
-            if !clicked && !alreadyAttempted && folderRecovery.hasAttempted {
-                runner.log("search: send visible-row match skipped because All folder was not confirmed")
-                return nil
+            // A posted click is reused for the rest of this resolve(). A consumed
+            // attempt that never posted still refuses this call, including the
+            // second visible-row pass after the Chats tab.
+            if !(folderRecovery.hasAttempted && folderRecovery.didPostClick) {
+                let clicked = folderRecovery.ensureAllFolder(
+                    in: rootWindow,
+                    kakao: kakao,
+                    runner: runner,
+                    reason: "send pre-match",
+                    trace: trace
+                )
+                if folderRecovery.hasAttempted && !clicked {
+                    runner.log("search: send visible-row match skipped because All folder was not confirmed")
+                    return nil
+                }
             }
         }
         var visibleRows = scanner.scan(in: rootWindow, limit: 80, trace: trace)
