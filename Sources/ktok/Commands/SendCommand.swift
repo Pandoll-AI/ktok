@@ -234,11 +234,19 @@ struct SendCommand: ParsableCommand {
     }
 
     private func isLikelyMessageInputElement(_ element: UIElement, in window: UIElement? = nil) -> Bool {
-        guard element.isEnabled else { return false }
         let role = element.role ?? ""
         if role == kAXTextAreaRole {
-            return true
+            // KakaoTalk 26.4 reports the composer as AXEnabled=false, and message bubbles are
+            // disabled AXTextAreas too (measured 2026-10-09). Same rule as MessageContextResolver:
+            // the composer is the text area in the bottom 20% of the chat window.
+            if let windowFrame = window?.frame, let frame = element.frame {
+                guard isElementLikelyInsideWindow(elementFrame: frame, windowFrame: windowFrame) else { return false }
+                let relativeMinY = (frame.minY - windowFrame.minY) / max(windowFrame.height, 1)
+                return relativeMinY >= 0.80
+            }
+            return element.isEnabled
         }
+        guard element.isEnabled else { return false }
 
         let editable: Bool = element.attributeOptional(kAXEditableAttribute) ?? false
         guard editable else { return false }
