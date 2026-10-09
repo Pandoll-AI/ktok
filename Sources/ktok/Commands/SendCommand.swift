@@ -404,7 +404,9 @@ struct SendCommand: ParsableCommand {
         if let focusedElement = kakao.applicationElement.focusedUIElement {
             let focusedCandidates = collectFocusedElementLineageCandidates(focusedElement)
             runner.log("message input fast path: focused lineage candidates=\(focusedCandidates.count)")
-            if let input = pickMessageInputField(from: focusedCandidates, in: chatWindow) {
+            // The fast path only trusts a text area: the focused lineage can hold the in-chat
+            // search field (AXTextField) or the transcript table; the full search below ranks those.
+            if let input = pickMessageInputField(from: focusedCandidates, in: chatWindow), input.role == kAXTextAreaRole {
                 runner.log("message input fast path resolved: role='\(input.role ?? "unknown")' title='\(input.title ?? "")'")
                 rememberCachedElement(slot: .messageInput, root: chatWindow, element: input, runner: runner)
                 return input
@@ -544,13 +546,15 @@ struct SendCommand: ParsableCommand {
         return false
     }
 
+    /// Best-scoring candidate, or nil when every candidate was rejected.
+    /// Rejected candidates score -greatestFiniteMagnitude; returning one of them sent text into
+    /// the transcript table or the in-chat search field (ENTER_NOT_EFFECTIVE, 2026-10-09).
     private func pickMessageInputField(from fields: [UIElement], in window: UIElement) -> UIElement? {
-        fields.sorted { lhs, rhs in
-            let lhsScore = scoreMessageInputCandidate(lhs, in: window)
-            let rhsScore = scoreMessageInputCandidate(rhs, in: window)
-            return lhsScore > rhsScore
-        }
-        .first
+        fields
+            .map { ($0, scoreMessageInputCandidate($0, in: window)) }
+            .filter { $0.1 > 0 }
+            .max { $0.1 < $1.1 }?
+            .0
     }
 
     private func scoreMessageInputCandidate(_ element: UIElement, in window: UIElement) -> Double {
